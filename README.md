@@ -21,34 +21,36 @@ built one module at a time.
   only), greeting "Aries active. Ready to cook." on launch
 - HUD background instead of code rain: very dark purple-black,
   faint grid, slow rotating glowing rings, drifting particles,
-  soft radial glow behind the core (~15 fps, **Pause background**
-  button to save CPU / battery). The old green code rain is gone —
+  soft radial glow behind the face (~15 fps, no pause control —
+  the animation just runs; the Pause-background button was
+  removed in 0.3.2). The old green code rain is gone —
   the user said the background sucked, and he was right.
-- A real robot face instead of a smiley face or a radar-like core
-  (drawn with QPainter, no image files): a big rounded robot head
-  with glowing purple edges, an antenna, two LARGE glowing cyan
-  eyes with pupils, and a mouth that moves. States: idle
-  (relaxed eyes, small smile), thinking / listening (eyes narrow
-  and look up, mouth a small "o"), speaking (mouth opens and
-  closes with the reply, plus equaliser bars), error (eyes dim,
-  mouth flat). The face is big and central — 320 px in a 400 px
-  left panel — not a small circle tucked in a sidebar.
+- A machine face instead of a smiley face or a radar-like core
+  (drawn with QPainter, no image files) — see 0.3.0 and 0.3.2
+  below: 0.3.0 was a robot head with eyes and a mouth; 0.3.2
+  replaced it with a single angular glowing visor, no smile,
+  no eyebrows, no human mouth, because the robot face looked
+  too humany. The face is big and central — 360 px in
+  fullscreen, the first thing you see.
 - HUD layout: face + real status readouts on the left (current
   time, model name, key set / not set, status), chat as a clean
   HUD panel with corner brackets on the right. No fake CPU / RAM
-  numbers — every readout is real. The left panel is filled by
-  the face now, so there is far less empty black space.
+  numbers — every readout is real. (0.3.2 cut this down: the
+  face is now centred and first, with one greeting line and
+  one tiny status line, and chat under it — see below.)
 - Chat pane wired to the NVIDIA LLM, with conversation history.
   LLM calls run in a worker thread, so the UI never freezes;
   401 / 429 / 410 errors show in-chat in plain words, not as a crash
 - Startup key check: if `NVIDIA_API_KEY` is missing, the UI shows
   the setup steps instead of crashing, with a **Check key again**
   button (no need to restart)
-- **Mini mode** button: switches to a small always-on-top window
-  with the SAME robot face (not a smiley face, not a radar core),
-  the greeting, and a status line; the mini face mirrors the main
-  face's states (idle / thinking / speaking). **Back to full Aries**
-  restores the main window (stub — full mini mode is a later module)
+- **Mini mode**: press the face to switch to a small
+  always-on-top window with the SAME machine face (0.3.2 —
+  the Mini-mode button is gone, the face click replaces it),
+  the greeting, and a status line; the mini face mirrors the
+  main face's states (idle / thinking / speaking). **Back to
+  full Aries** restores the main window (stub — full mini mode
+  is a later module)
 
 ## What changed in 0.2.2 — lively core, smooth mini mode
 
@@ -131,6 +133,45 @@ built one module at a time.
   always-on-top) — mini mode got the same makoma treatment:
   centred, more padding, the sans+serif greeting, pill button.
 
+## What changed in 0.3.2 — machine face, fullscreen, face-first
+
+- The user tested 0.3.1 and said "nice, we are getting there",
+  with a list of fixes — all of them are in this version:
+- **No Pause-background button, no Mini-mode button.** The
+  background animation just runs (calm, ~15 fps). **Pressing the
+  face opens mini mode** — click the face in the main window and
+  it docks bottom-right; "Back to full Aries" restores it.
+- **The face is a machine now, not a human.** The 0.3.0 robot
+  face looked too humany, so the smile, the eyebrows and the
+  human mouth are gone. The new face (`AriesFaceWidget`) is an
+  angular machine head with a single glowing visor: a sharp
+  hexagonal visor bar holding two slanted eye-slits whose bright
+  cores shift with the gaze. Expression comes from light and
+  motion only — visor width/brightness, a visor dimming pulse
+  instead of a blink, waveform bars under the visor when
+  speaking, a top vent and a status LED. It still breathes,
+  looks around on its own, follows the cursor, and brightens
+  on hover.
+- **Fullscreen like VLC.** The main window launches fullscreen,
+  covering the whole screen including the taskbar. **F11**
+  toggles fullscreen, **Esc** exits it, and there is a tiny
+  "Fullscreen (F11)" button top-right. Mini mode never goes
+  fullscreen — it stays a small always-on-top window.
+- **The big text section is gone.** No TIME / MODEL / KEY
+  readout block, no ARIES title block, no CONVERSATION header.
+  The screen is now: the face — big (360 px), centred, the
+  first thing you see — one short greeting line ("Aries
+  active." bold sans + "Ready to cook." italic serif cream),
+  one tiny status line (READY / THINKING / …), then chat.
+  Sleek, like a clean chat app.
+- **Fonts fixed.** The font sucked too, per the user — so the
+  whole UI is now **Segoe UI** ("Segoe UI Semibold" for
+  headings), 13–15 px with generous line spacing, Georgia
+  italic for the serif greeting word only. No default Qt
+  font, no monospace for main text anywhere — title, greeting,
+  chat, input, buttons and status all use Segoe UI, falling
+  back to Arial / sans-serif if Segoe UI is missing.
+
 Still to come: voice (Module 3), face-recognition login (Module 4),
 permissions system (Module 5), full mini mode (Module 6).
 
@@ -185,8 +226,10 @@ From the project folder, with the virtual environment activated:
 python -m aries.main
 ```
 
-That opens the desktop UI. You will see the JARVIS HUD, the big
-robot face, and `Aries active. Ready to cook.` in the chat pane.
+That opens the desktop UI, fullscreen by default. You will see
+the big machine face first, then `Aries active. Ready to cook.`
+in one line, then the chat. Press **F11** to leave fullscreen,
+**Esc** does the same; click the face to open mini mode.
 Type in the box at the bottom and press Send (or Enter).
 
 For the old text-only chat loop instead:

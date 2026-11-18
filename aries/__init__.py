@@ -13,10 +13,17 @@ the user said the core did not look like a face at all; 0.3.1
 kept the purple and the robot face but restyled the whole UI
 with the makoma.io design language at the user's call — restraint,
 centred layout, huge whitespace, bold sans + italic serif greeting,
-tiny letterspaced state labels, pill controls, calm motion).
+tiny letterspaced state labels, pill controls, calm motion;
+0.3.2 (user: "we are getting there") removed the Pause-background
+and Mini-mode buttons (mini opens by pressing the face), made the
+face a machine visor — no smile, no eyebrows, no human mouth —
+launched fullscreen like VLC (F11 toggles, Esc exits), cut the
+text down to one greeting line + one tiny status line with the
+face as the hero, and switched all fonts to Segoe UI (Georgia
+italic for the greeting word only).
 Later modules add voice, face-recognition login,
 the permissions system, and full mini mode.
 """
 
-__version__ = "0.3.1"
+__version__ = "0.3.2"
 __all__ = ["__version__"]
