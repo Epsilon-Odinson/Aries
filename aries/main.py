@@ -1,12 +1,15 @@
-"""Minimal CLI entry point for Aries (Module 1).
+"""Entry point for Aries (Module 2).
 
-Prints the greeting, then runs a simple chat loop against the
-NVIDIA LLM. Type 'quit' or 'exit' (or Ctrl+C) to stop.
+By default ``python -m aries.main`` launches the PyQt5 desktop UI.
+Pass ``--cli`` for the old text-only chat loop (Module 1).
 
-This is the text-only core. The PyQt5 desktop UI is Module 2.
+    python -m aries.main          # desktop UI (default)
+    python -m aries.main --cli    # CLI chat loop
 """
 
 from __future__ import annotations
+
+import sys
 
 from .config import get_api_key
 from .llm import AriesLLMError, chat
@@ -19,7 +22,8 @@ SYSTEM_PROMPT = (
 )
 
 
-def main() -> None:
+def run_cli() -> None:
+    """Text-only chat loop (Module 1)."""
     print(GREETING)
     try:
         get_api_key()
@@ -51,5 +55,24 @@ def main() -> None:
         print(f"Aries: {reply}\n")
 
 
+def main(argv: list[str] | None = None) -> int:
+    args = list(sys.argv[1:] if argv is None else argv)
+    if "--cli" in args:
+        run_cli()
+        return 0
+    # Desktop UI is the default. Import here so --cli never needs PyQt5.
+    try:
+        from .ui import run_ui
+    except ImportError as exc:
+        print(
+            "The desktop UI needs PyQt5, which is not installed.\n"
+            f"Import error: {exc}\n"
+            "Install it with: pip install -r requirements.txt\n"
+            "Or run the text-only version: python -m aries.main --cli"
+        )
+        return 1
+    return run_ui()
+
+
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

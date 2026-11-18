@@ -12,11 +12,29 @@ and a mini mode — built one module at a time.
 - Project skeleton
 - NVIDIA LLM client (`nvidia/nemotron-3.5-lightning-30b-a3b`) via
   `https://integrate.api.nvidia.com/v1/chat/completions`
-- CLI chat loop (`python -m aries.main`)
+- CLI chat loop (`python -m aries.main --cli`)
 
-Still to come: PyQt5 desktop UI (Module 2), voice (Module 3),
-face-recognition login (Module 4), permissions system (Module 5),
-mini mode (Module 6).
+## What works so far (Module 2) — desktop UI
+
+- PyQt5 main window, deep purple (`#0d0010` / `#7b2fff`), greeting
+  "Aries active. Ready to cook." on launch
+- Matrix-style code-rain background (~15 fps, modest columns,
+  **Pause rain** button to save CPU / battery)
+- Animated bot face (drawn with QPainter, no image files):
+  idle (blinks, smiles), listening (wide eyes), speaking
+  (mouth opens/closes while a reply is showing)
+- Chat pane wired to the NVIDIA LLM, with conversation history.
+  LLM calls run in a worker thread, so the UI never freezes;
+  401 / 429 / 410 errors show in-chat in plain words, not as a crash
+- Startup key check: if `NVIDIA_API_KEY` is missing, the UI shows
+  the setup steps instead of crashing, with a **Check key again**
+  button (no need to restart)
+- **Mini mode** button: switches to a small always-on-top window
+  (stub — full mini mode is a later module); **Back to full Aries**
+  restores the main window
+
+Still to come: voice (Module 3), face-recognition login (Module 4),
+permissions system (Module 5), full mini mode (Module 6).
 
 ## Setup on Windows
 
@@ -69,8 +87,21 @@ From the project folder, with the virtual environment activated:
 python -m aries.main
 ```
 
-You will see `Aries active. Ready to cook.`, then a chat prompt.
-Type `quit` to exit.
+That opens the desktop UI. You will see the code rain, the bot
+face, and `Aries active. Ready to cook.` in the chat pane.
+Type in the box at the bottom and press Send (or Enter).
+
+For the old text-only chat loop instead:
+
+```bat
+python -m aries.main --cli
+```
+
+Type `quit` to exit the CLI loop.
+
+If the key is not set, the UI does not crash — it shows the setup
+steps in the chat pane. Set the key (see above), then press
+**Check key again** in the UI.
 
 ## Project layout
 
@@ -78,8 +109,10 @@ Type `quit` to exit.
 aries/
   __init__.py    Package marker, version
   config.py      API key loading (env, then keyring), never prints the key
-  llm.py         NVIDIA chat client, clear errors on 401 / 429
-  main.py        CLI entry point and chat loop
+  llm.py         NVIDIA chat client, clear errors on 401 / 429 / 410
+  main.py        Entry point: UI by default, --cli for the text loop
+  ui.py          PyQt5 window: code rain, bot face, chat pane,
+                 worker thread, mini-mode stub
 requirements.txt
 README.md
 .gitignore       Secrets, virtual envs, face/voice data, build output
