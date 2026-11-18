@@ -1,0 +1,32 @@
+# Render blueprint for Aries — one Docker web service + one Postgres DB.
+# Apply with: render.com → New → Blueprint → point at this repo.
+# The NVIDIA key is NEVER in this file: set NVIDIA_API_KEY in the
+# Render dashboard (Environment) after the first deploy.
+services:
+  - type: web
+    name: aries
+    env: docker
+    dockerfilePath: ./production/Dockerfile
+    dockerContext: ./production
+    plan: free
+    healthCheckPath: /api/health
+    envVars:
+      - key: NVIDIA_API_KEY
+        sync: false # set in the Render dashboard, never in code
+      - key: CHAT_MODEL
+        value: nvidia/nemotron-3.5-lightning-30b-a3b
+      - key: DATABASE_URL
+        fromDatabase:
+          name: aries-db
+          property: connectionString
+      - key: FACES_DIR
+        value: /app/server/data/faces
+      # VISION_MODEL: leave unset until meta/llama-3.2-11b-vision-instruct
+      # is verified live on NVIDIA hosting. Screenshots then fall back
+      # honestly instead of inventing a description.
+
+databases:
+  - name: aries-db
+    plan: free
+    databaseName: aries
+    user: aries

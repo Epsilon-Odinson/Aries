@@ -1,0 +1,7 @@
+.env
+server/data/
+server/static/
+web/node_modules/
+web/dist/
+__pycache__/
+*.pyc
