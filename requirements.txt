@@ -1,0 +1,6 @@
+# Aries — Module 1 dependencies (Windows, Python 3.11+)
+# No dlib / face-recognition yet — that comes with the face-login module.
+PyQt5==5.15.11
+requests==2.32.3
+python-dotenv==1.0.1
+keyring>=24.3,<26

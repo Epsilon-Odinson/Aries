@@ -221,3 +221,17 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Aries — secrets and personal data (added 2026-11-18)
+.env.*
+*.key
+config.json
+secrets/
+face_data/
+recordings/
+*.wav
+*.mp3
+models/
+.idea/
+.vscode/
+logs/
