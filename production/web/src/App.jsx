@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import DitherVeil from "./DitherVeil.jsx";
+import { NEBULA_SRC } from "./nebulaImage.js";
 import Face from "./Face.jsx";
 import { api } from "./api.js";
 
@@ -225,7 +226,7 @@ export default function App() {
     <div className="aries-app">
       <div className="aries-veil">
         <DitherVeil
-          src="https://images.unsplash.com/photo-1737071371043-761e02b1ef95?q=80&w=1400&auto=format&fit=crop"
+          src={NEBULA_SRC}
           pattern="floyd"
           pixelSize={2}
           inkColor="#120f17"

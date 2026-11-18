@@ -3,7 +3,8 @@ import { Renderer, Program, Mesh, Triangle, Texture, RenderTarget } from 'ogl';
 
 import './DitherVeil.css';
 
-const DEFAULT_SRC = 'https://images.unsplash.com/photo-1737071371043-761e02b1ef95?q=80&w=1400&auto=format&fit=crop';
+import { NEBULA_SRC } from './nebulaImage.js';
+const DEFAULT_SRC = NEBULA_SRC;
 
 const ORDERED = { bayer: 0, noise: 1, lines: 2 };
 

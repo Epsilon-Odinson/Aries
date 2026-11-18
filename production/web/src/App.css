@@ -25,6 +25,13 @@ body {
 .aries-veil {
   position: absolute;
   inset: 0;
+  /* Fallback so the page is never black if the veil canvas or image fails:
+     the same purple nebula, as plain CSS gradients. */
+  background:
+    radial-gradient(ellipse 60% 50% at 70% 20%, rgba(123, 47, 255, 0.55), transparent 70%),
+    radial-gradient(ellipse 50% 40% at 20% 75%, rgba(88, 28, 180, 0.5), transparent 70%),
+    radial-gradient(ellipse 40% 35% at 45% 45%, rgba(168, 85, 247, 0.35), transparent 70%),
+    #0d0010;
 }
 
 .aries-overlay {
