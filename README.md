@@ -45,6 +45,32 @@ built one module at a time.
   (idle / thinking / speaking). **Back to full Aries** restores
   the main window (stub — full mini mode is a later module)
 
+## What changed in 0.2.2 — lively core, smooth mini mode
+
+- The core is now a living head, in both the main window and mini
+  mode: it breathes (gentle swell and bob, always), blinks (a quick
+  dimming pulse every few seconds), and looks around on its own
+  (its gaze drifts to random points, faster while thinking).
+  When the mouse is near, the core looks toward the cursor and
+  brightens when hovered — like it noticed you. While speaking it
+  shows waveform bars and bobs slightly. All of it is capped at
+  ~16 fps, so it stays light on a ThinkPad T14.
+- Mini mode now **docks itself bottom-right** (16 px from the
+  right and bottom edges, above the taskbar) when it opens, and
+  it stays draggable from there.
+- Mini mode **drags smoothly, no stutter**: dragging is handled
+  directly (press anywhere, even on the core, and the window
+  follows the mouse offset), and while dragging the core drops
+  to a cheap paint path. The old version had no drag handling,
+  so a drag fell back to the OS moving a window that repainted
+  heavily on every move.
+- Mini mode stays **always-on-top and active** (it raises and
+  takes focus when shown).
+- Note: no specific figure/image was supplied with this request,
+  so the core is the lively JARVIS core described above. If a
+  specific figure is sent later, the face can be reworked to
+  match it.
+
 Still to come: voice (Module 3), face-recognition login (Module 4),
 permissions system (Module 5), full mini mode (Module 6).
 

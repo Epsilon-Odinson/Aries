@@ -6,9 +6,16 @@ dark HUD — faint grid, slow rotating rings, drifting particles, a soft
 radial glow behind the core — and the bot "face" is a glowing
 arc-reactor core with concentric rotating arcs.
 
+The core is a living head, not a static ring: it breathes, blinks,
+looks around on its own, and follows the mouse cursor with its gaze
+when the cursor is near. Mini mode (0.2.2) docks itself bottom-right,
+drags smoothly, and stays always-on-top and active.
+
 Light on purpose: background and core animations are capped at
-~15 fps, and everything is drawn with QPainter (no image assets),
+~15-16 fps, and everything is drawn with QPainter (no image assets),
 so this stays comfortable on a ThinkPad T14 (11th Gen i5, 16 GB RAM).
+While the mini window is being dragged the core drops to a cheap
+paint path, so dragging does not stutter.
 
 Kept OUT of Module 2 on purpose: voice, face-recognition login,
 permissions, DuckDuckGo search, tool calling / autonomy.
@@ -21,7 +28,7 @@ import datetime
 import math
 import random
 
-from PyQt5.QtCore import QObject, Qt, QThread, QTimer, pyqtSignal
+from PyQt5.QtCore import QEvent, QObject, Qt, QThread, QTimer, pyqtSignal
 from PyQt5.QtGui import QColor, QFont, QPainter, QPen
 from PyQt5.QtWidgets import (
     QApplication,
@@ -177,9 +184,24 @@ class HudBackgroundWidget(QWidget):
 class HudCoreWidget(QWidget):
     """Glowing arc-reactor core. This IS the bot face — no smiley.
 
-    States: "idle" (slow pulse, slow rings), "listening"/"thinking"
-    (faster spin, brighter core, expanding ripple), "speaking"
-    (pulsing waveform bars around the core).
+    A living head, not a static ring:
+    - Breathing: the core gently swells and bobs, always, even idle.
+    - Look-around: every few seconds the gaze drifts to a random
+      point and back, like a head turning to look at something.
+    - Cursor gaze: when the mouse is over/near this window the core
+      looks toward the cursor, smoothly (never a snap). Hovering
+      brightens it, like it noticed you.
+    - Blink: every few seconds a quick dimming pulse, like a blink.
+    - States: "idle" (slow pulse, slow rings), "listening"/"thinking"
+      (faster spin, brighter core, expanding ripple, faster
+      look-around), "speaking" (pulsing waveform bars around the
+      core, plus a slight bob).
+
+    All animation is capped at ~16 fps. While ``_dragging`` is set
+    (mini window being dragged) the paint path is cheap — fewer
+    glow layers — so dragging stays smooth.
+    Callers can also drive the gaze directly with
+    :meth:`set_cursor_gaze` (values in -1..1).
     """
 
     STATES = {"idle", "listening", "thinking", "speaking"}
@@ -187,12 +209,22 @@ class HudCoreWidget(QWidget):
     def __init__(self, diameter: int = 260, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setFixedSize(diameter, diameter)
+        self.setMouseTracking(True)
         self._diameter = diameter
         self._state = "idle"
         self._angle = 0.0
         self._pulse = 0.0
         self._ripple = 0.0
         self._bars = [0.4] * 24
+        # Gaze: current (smoothed) and target, each (x, y) in -1..1.
+        self._gaze = (0.0, 0.0)
+        self._gaze_target = (0.0, 0.0)
+        self._frames_until_look = random.randint(40, 70)
+        self._frames_until_blink = random.randint(50, 100)
+        self._blink = 0.0  # 0 = eyes open, 1 = fully blinked
+        self._blink_dir = 0  # -1 closing, +1 opening, 0 not blinking
+        self._hover = False
+        self._dragging = False
         self._timer = QTimer(self)
         self._timer.setInterval(60)  # ~16 fps
         self._timer.timeout.connect(self._animate)
@@ -206,6 +238,64 @@ class HudCoreWidget(QWidget):
     def state(self) -> str:
         return self._state
 
+    def gaze(self):
+        """Current smoothed gaze offset, (x, y) in about -1..1."""
+        return self._gaze
+
+    def set_cursor_gaze(self, gx: float, gy: float) -> None:
+        """Point the gaze at a direction, clamped to -0.45..0.45."""
+        gx = max(-0.45, min(0.45, gx))
+        gy = max(-0.45, min(0.45, gy))
+        self._gaze_target = (gx, gy)
+
+    def set_hover(self, hover: bool) -> None:
+        self._hover = hover
+        self.update()
+
+    def is_hovered(self) -> bool:
+        return self._hover
+
+    def set_dragging(self, dragging: bool) -> None:
+        """Cheap paint path while dragging, so a drag never stutters."""
+        self._dragging = dragging
+        self.update()
+
+    def is_dragging(self) -> bool:
+        return self._dragging
+
+    def _pick_look_target(self) -> None:
+        """Idle look-around: drift to a random nearby point."""
+        self._gaze_target = (
+            random.uniform(-0.35, 0.35),
+            random.uniform(-0.30, 0.30),
+        )
+
+    def _update_gaze_from_cursor(self) -> bool:
+        """Follow the real cursor when it is over/near this widget.
+
+        Returns True when the cursor is driving the gaze, so the
+        idle look-around does not fight it.
+        """
+        try:
+            from PyQt5.QtGui import QCursor
+            pos = QCursor.pos()
+        except Exception:
+            return False
+        local = self.mapFromGlobal(pos)
+        # Near = inside the widget, or within ~80 px of it.
+        near = (-80 <= local.x() <= self.width() + 80
+                and -80 <= local.y() <= self.height() + 80)
+        # Hovering brightens the core, like it noticed the cursor.
+        self._hover = (-10 <= local.x() <= self.width() + 10
+                       and -10 <= local.y() <= self.height() + 10)
+        if not near:
+            return False
+        cx = cy = self._diameter / 2.0
+        gx = (local.x() - cx) / max(cx, 1.0)
+        gy = (local.y() - cy) / max(cy, 1.0)
+        self.set_cursor_gaze(gx, gy)
+        return True
+
     def _animate(self) -> None:
         speed = {"idle": 1.2, "listening": 5.0, "thinking": 5.0, "speaking": 2.5}
         self._angle = (self._angle + speed[self._state]) % 360
@@ -217,19 +307,55 @@ class HudCoreWidget(QWidget):
                 0.35 + 0.65 * abs(math.sin(self._pulse * 1.7 + k * 0.9))
                 for k in range(24)
             ]
+        # Gaze: cursor wins when near, otherwise idle look-around.
+        # Thinking/listening look around faster, like searching.
+        cursor_driving = self._update_gaze_from_cursor()
+        if not cursor_driving:
+            self._frames_until_look -= 1
+            look_every = 14 if self._state in {"listening", "thinking"} else 55
+            if self._frames_until_look <= 0:
+                self._pick_look_target()
+                self._frames_until_look = random.randint(
+                    max(8, look_every - 10), look_every + 25)
+        # Smoothly ease the gaze toward its target (never a snap).
+        gx, gy = self._gaze
+        tx, ty = self._gaze_target
+        self._gaze = (gx + (tx - gx) * 0.15, gy + (ty - gy) * 0.15)
+        # Blink: schedule one every ~3-6 s, close+open over ~4 frames.
+        if self._blink_dir == 0:
+            self._frames_until_blink -= 1
+            if self._frames_until_blink <= 0:
+                self._blink_dir = -1
+        else:
+            self._blink += 0.35 * self._blink_dir
+            if self._blink >= 1.0:
+                self._blink, self._blink_dir = 1.0, 1
+            elif self._blink <= 0.0:
+                self._blink, self._blink_dir = 0.0, 0
+                self._frames_until_blink = random.randint(50, 100)
         self.update()
 
     def paintEvent(self, event) -> None:  # noqa: N802 - Qt naming
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
-        cx = cy = self._diameter / 2.0
+        # Head movement: the whole core shifts a few px with the gaze
+        # (like a head turning) and bobs gently with the breath.
+        # Blink dims the core, like eyelids closing.
+        breathe = math.sin(self._pulse)
+        bob = 2.0 * breathe + (1.5 * math.sin(self._pulse * 1.7)
+                               if self._state == "speaking" else 0.0)
+        gx, gy = self._gaze
+        cx = self._diameter / 2.0 + gx * self._diameter * 0.06
+        cy = self._diameter / 2.0 + gy * self._diameter * 0.06 + bob
         r = self._diameter / 2.0 - 6
-        bright = self._state in {"listening", "thinking"}
+        bright = self._state in {"listening", "thinking"} or self._hover
+        dim = 1.0 - 0.55 * self._blink  # blink dims the core
 
-        # Outer glow.
-        for i in range(5, 0, -1):
+        # Outer glow. While dragging, only 2 cheap layers (no stutter).
+        glow_layers = 2 if self._dragging else 5
+        for i in range(glow_layers, 0, -1):
             painter.setPen(Qt.NoPen)
-            painter.setBrush(_alpha(ACCENT, 8 if not bright else 12))
+            painter.setBrush(_alpha(ACCENT, int((8 if not bright else 12) * dim)))
             gr = r * (0.55 + 0.11 * i)
             painter.drawEllipse(int(cx - gr), int(cy - gr), int(gr * 2), int(gr * 2))
 
@@ -280,26 +406,31 @@ class HudCoreWidget(QWidget):
                     int(cx + r2 * math.cos(a)), int(cy + r2 * math.sin(a)),
                 )
 
-        # Pulsing core.
-        core_r = r * 0.34 * (1 + 0.06 * math.sin(self._pulse))
+        # Pulsing core (breathing: it swells a little with the pulse).
+        core_r = r * 0.34 * (1 + 0.06 * math.sin(self._pulse)) * dim
         if bright:
             core_r *= 1.08
-        for i in range(4, 0, -1):
+        core_glow = 2 if self._dragging else 4
+        for i in range(core_glow, 0, -1):
             painter.setPen(Qt.NoPen)
             painter.setBrush(_alpha(CYAN if i % 2 == 0 else ACCENT, 26))
             gr = core_r * (0.55 + 0.22 * i)
             painter.drawEllipse(int(cx - gr), int(cy - gr), int(gr * 2), int(gr * 2))
-        painter.setPen(QPen(_alpha(ACCENT_SOFT, 220), 2))
-        painter.setBrush(_alpha("#2a0a4a", 220))
+        painter.setPen(QPen(_alpha(ACCENT_SOFT, int(220 * dim)), 2))
+        painter.setBrush(_alpha("#2a0a4a", int(220 * dim)))
         painter.drawEllipse(
             int(cx - core_r), int(cy - core_r),
             int(core_r * 2), int(core_r * 2),
         )
-        # Core centre dot.
+        # Core centre dot — the "pupil". It looks where the gaze
+        # points, shifted a little further than the core itself.
         painter.setPen(Qt.NoPen)
-        painter.setBrush(_alpha(CYAN, 255 if bright else 200))
+        painter.setBrush(_alpha(CYAN, int((255 if bright else 200) * dim)))
         dot = max(4.0, core_r * 0.22)
-        painter.drawEllipse(int(cx - dot), int(cy - dot), int(dot * 2), int(dot * 2))
+        dot_x = cx + gx * r * 0.12
+        dot_y = cy + gy * r * 0.12
+        painter.drawEllipse(int(dot_x - dot), int(dot_y - dot),
+                            int(dot * 2), int(dot * 2))
 
 
 # --- HUD panel frame -----------------------------------------------------------
@@ -356,19 +487,47 @@ class MiniWindow(QWidget):
 
     Stub for full mini mode (later module): core, greeting, status,
     and a button to come back. The core shows the same states
-    (idle / thinking / speaking) as the main window.
+    (idle / thinking / speaking) as the main window, and is just as
+    lively — breathing, blinking, looking around, following the
+    cursor with its gaze.
+
+    Smooth dragging (0.2.2): the old version had no drag handling
+    at all, so a drag fell back to the OS moving a window whose core
+    repainted heavily on every move — that is what stuttered. Now
+    dragging is done here, directly: press anywhere (core included),
+    remember the press offset, and move() the window on every
+    mouse-move. While dragging the core drops to its cheap paint
+    path and its animation timer is not asked to repaint the whole
+    window, so the move stays smooth. The window is also
+    mouse-tracked, so hovering brightens the core / draws its gaze.
+
+    Auto-dock: on first show it docks itself bottom-right, 16 px
+    from the right and bottom edges of the screen's *available*
+    geometry (above the taskbar). It stays draggable from there.
     """
+
+    DOCK_MARGIN = 16
 
     closed = pyqtSignal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
-        super().__init__(parent, Qt.WindowStaysOnTopHint | Qt.Tool)
+        super().__init__(
+            parent,
+            Qt.WindowStaysOnTopHint | Qt.Tool | Qt.Window,
+        )
         self.setWindowTitle("Aries — mini")
         self.setFixedSize(280, 330)
         self.setStyleSheet(f"background: {BG}; color: {TEXT};")
+        self.setMouseTracking(True)
+        self.setAttribute(Qt.WA_AlwaysShowToolTips, True)
+        self._drag_offset = None
+        self._dragging = False
+        self._user_moved = False
+        self._docked = False
         layout = QVBoxLayout(self)
         layout.setContentsMargins(14, 12, 14, 12)
         self._core = HudCoreWidget(150, self)
+        self._core.installEventFilter(self)
         layout.addWidget(self._core, alignment=Qt.AlignCenter)
         label = QLabel(GREETING, self)
         label.setWordWrap(True)
@@ -385,6 +544,87 @@ class MiniWindow(QWidget):
         )
         restore.clicked.connect(self.close)
         layout.addWidget(restore)
+
+    # -- auto-dock bottom-right --------------------------------------------
+    def dock_bottom_right(self) -> None:
+        """Move to the bottom-right corner, above the taskbar."""
+        screen = self.screen() or QApplication.primaryScreen()
+        if screen is None:
+            return
+        avail = screen.availableGeometry()  # excludes the taskbar
+        x = avail.x() + avail.width() - self.width() - self.DOCK_MARGIN
+        y = avail.y() + avail.height() - self.height() - self.DOCK_MARGIN
+        self.move(x, y)
+        self._docked = True
+
+    def showEvent(self, event) -> None:  # noqa: N802 - Qt naming
+        super().showEvent(event)
+        if not self._docked and not self._user_moved:
+            self.dock_bottom_right()
+        # Always active: stay on top and take focus when shown.
+        self.raise_()
+        self.activateWindow()
+
+    # -- smooth dragging ------------------------------------------------------
+    def _begin_drag(self, global_pos) -> None:
+        self._drag_offset = global_pos - self.pos()
+        self._dragging = True
+        self._core.set_dragging(True)
+
+    def _move_drag(self, global_pos) -> None:
+        if not self._dragging or self._drag_offset is None:
+            return
+        # Move the window directly — no layout, no full repaint.
+        self.move(global_pos - self._drag_offset)
+        self._user_moved = True
+
+    def _end_drag(self) -> None:
+        self._dragging = False
+        self._drag_offset = None
+        self._core.set_dragging(False)
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802 - Qt naming
+        if event.button() == Qt.LeftButton:
+            self._begin_drag(event.globalPos())
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event) -> None:  # noqa: N802 - Qt naming
+        self._move_drag(event.globalPos())
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event) -> None:  # noqa: N802 - Qt naming
+        self._end_drag()
+        super().mouseReleaseEvent(event)
+
+    def eventFilter(self, watched, event) -> bool:  # noqa: N802 - Qt naming
+        # Dragging must work when the press starts on the core (a
+        # child widget would otherwise swallow the mouse events),
+        # and hovering the core must brighten it / draw its gaze.
+        if watched is self._core:
+            if event.type() == QEvent.MouseButtonPress and event.button() == Qt.LeftButton:
+                self._begin_drag(event.globalPos())
+                return True
+            if event.type() == QEvent.MouseMove:
+                self._move_drag(event.globalPos())
+                return True
+            if event.type() == QEvent.MouseButtonRelease:
+                self._end_drag()
+                return True
+            if event.type() == QEvent.Enter:
+                self._core.set_hover(True)
+                return False
+            if event.type() == QEvent.Leave:
+                self._core.set_hover(False)
+                return False
+        return super().eventFilter(watched, event)
+
+    def enterEvent(self, event) -> None:  # noqa: N802 - Qt naming
+        self._core.set_hover(True)
+        super().enterEvent(event)
+
+    def leaveEvent(self, event) -> None:  # noqa: N802 - Qt naming
+        self._core.set_hover(False)
+        super().leaveEvent(event)
 
     def set_state(self, state: str) -> None:
         """Mirror the main window's core state."""
@@ -663,7 +903,11 @@ class AriesWindow(QMainWindow):
         self._mini = MiniWindow()
         self._mini.set_state(self._core.state())
         self._mini.closed.connect(self._close_mini)
+        # Dock bottom-right (above the taskbar) before showing.
+        self._mini.dock_bottom_right()
         self._mini.show()
+        self._mini.raise_()
+        self._mini.activateWindow()
         self.hide()
 
     def _close_mini(self) -> None:
