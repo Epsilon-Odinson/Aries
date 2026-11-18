@@ -1,9 +1,9 @@
 # Aries
 
-Aries is a Python PC desktop AI companion. Deep purple UI, a
-Matrix-style code-rain background, an animated bot face, voice and
-face-recognition login, a permissions system for sensitive actions,
-and a mini mode — built one module at a time.
+Aries is a Python PC desktop AI companion. JARVIS-style HUD in deep
+purple, a glowing arc-reactor core, voice and face-recognition
+login, a permissions system for sensitive actions, and a mini mode —
+built one module at a time.
 
 **Greeting:** "Aries active. Ready to cook."
 
@@ -14,15 +14,25 @@ and a mini mode — built one module at a time.
   `https://integrate.api.nvidia.com/v1/chat/completions`
 - CLI chat loop (`python -m aries.main --cli`)
 
-## What works so far (Module 2) — desktop UI
+## What works so far (Module 2) — desktop UI (JARVIS redesign, 0.2.1)
 
-- PyQt5 main window, deep purple (`#0d0010` / `#7b2fff`), greeting
-  "Aries active. Ready to cook." on launch
-- Matrix-style code-rain background (~15 fps, modest columns,
-  **Pause rain** button to save CPU / battery)
-- Animated bot face (drawn with QPainter, no image files):
-  idle (blinks, smiles), listening (wide eyes), speaking
-  (mouth opens/closes while a reply is showing)
+- PyQt5 main window, JARVIS-style HUD in deep purple
+  (`#0d0010` / `#7b2fff`, a touch of cyan `#35e0ff` on the core
+  only), greeting "Aries active. Ready to cook." on launch
+- HUD background instead of code rain: very dark purple-black,
+  faint grid, slow rotating glowing rings, drifting particles,
+  soft radial glow behind the core (~15 fps, **Pause background**
+  button to save CPU / battery). The old green code rain is gone —
+  the user said the background sucked, and he was right.
+- Glowing arc-reactor core instead of a smiley face (drawn with
+  QPainter, no image files): concentric rotating arcs, pulsing
+  core. States: idle (slow pulse, slow rings), thinking /
+  listening (faster spin, brighter core, expanding ripple),
+  speaking (waveform bars pulse around the core)
+- HUD layout: core + real status readouts on the left (current
+  time, model name, key set / not set, status), chat as a clean
+  HUD panel with corner brackets on the right. No fake CPU / RAM
+  numbers — every readout is real.
 - Chat pane wired to the NVIDIA LLM, with conversation history.
   LLM calls run in a worker thread, so the UI never freezes;
   401 / 429 / 410 errors show in-chat in plain words, not as a crash
@@ -30,8 +40,10 @@ and a mini mode — built one module at a time.
   the setup steps instead of crashing, with a **Check key again**
   button (no need to restart)
 - **Mini mode** button: switches to a small always-on-top window
-  (stub — full mini mode is a later module); **Back to full Aries**
-  restores the main window
+  with the SAME JARVIS core (not a smiley face), the greeting, and
+  a status line; the mini core mirrors the main core's states
+  (idle / thinking / speaking). **Back to full Aries** restores
+  the main window (stub — full mini mode is a later module)
 
 Still to come: voice (Module 3), face-recognition login (Module 4),
 permissions system (Module 5), full mini mode (Module 6).
@@ -87,8 +99,8 @@ From the project folder, with the virtual environment activated:
 python -m aries.main
 ```
 
-That opens the desktop UI. You will see the code rain, the bot
-face, and `Aries active. Ready to cook.` in the chat pane.
+That opens the desktop UI. You will see the JARVIS HUD, the glowing
+core, and `Aries active. Ready to cook.` in the chat pane.
 Type in the box at the bottom and press Send (or Enter).
 
 For the old text-only chat loop instead:
@@ -111,8 +123,8 @@ aries/
   config.py      API key loading (env, then keyring), never prints the key
   llm.py         NVIDIA chat client, clear errors on 401 / 429 / 410
   main.py        Entry point: UI by default, --cli for the text loop
-  ui.py          PyQt5 window: code rain, bot face, chat pane,
-                 worker thread, mini-mode stub
+  ui.py          PyQt5 window: JARVIS HUD background, arc-reactor
+                 core, chat pane, worker thread, mini-mode stub
 requirements.txt
 README.md
 .gitignore       Secrets, virtual envs, face/voice data, build output
