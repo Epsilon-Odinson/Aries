@@ -1,12 +1,21 @@
 """PyQt5 desktop UI for Aries (Module 2, JARVIS redesign).
 
 JARVIS-style HUD in Aries' deep-purple palette (background #0d0010,
-accent #7b2fff). No code rain, no cartoon face: the background is a
-dark HUD — faint grid, slow rotating rings, drifting particles, a soft
-radial glow behind the core — and the bot "face" is a glowing
-arc-reactor core with concentric rotating arcs.
+accent #7b2fff), restyled 0.3.1 with the makoma.io design language
+(keep the purple, add makoma's layout and style): restraint — one
+object, one idea per screen, huge whitespace, almost no chrome;
+bold geometric sans paired with an italic serif for the emotional
+word ("Aries active." / "Ready to cook."); tiny uppercase
+letterspaced labels for every state; pill controls with thin
+hairline borders and soft corners; slow, calm glow/drift/fade
+motion, never snappy. The background is a dark HUD — faint grid,
+slow rotating rings, drifting particles, a soft radial glow behind
+the face — and the bot has a REAL robot face: a big rounded robot
+head with two large glowing eyes that blink, look around and
+follow the cursor, and a mouth that smiles, thinks and actually
+moves when it speaks.
 
-The core is a living head, not a static ring: it breathes, blinks,
+The face is a living head, not a static picture: it breathes, blinks,
 looks around on its own, and follows the mouse cursor with its gaze
 when the cursor is near. Mini mode (0.2.2) docks itself bottom-right,
 drags smoothly, and stays always-on-top and active.
@@ -53,10 +62,14 @@ PANEL_SEMI = "rgba(26, 0, 38, 215)"
 ACCENT = "#7b2fff"
 ACCENT_SOFT = "#a86bff"
 TEXT = "#e8e0ff"
+CREAM = "#f5f0e0"  # makoma-style cream for the italic serif word
 MUTED = "#9a8fb5"
 CYAN = "#35e0ff"  # JARVIS accent for the core only; purple stays dominant
+GOLD = "#d9a441"  # makoma-style gold, rationed to ONE tiny dot only
 ERROR_RED = "#ff6b81"
 MONO = "Consolas"
+SANS = "Segoe UI, Arial, sans-serif"
+SERIF = "Georgia, 'Times New Roman', serif"
 
 
 def _alpha(color: str, alpha: int) -> QColor:
@@ -103,15 +116,16 @@ class HudBackgroundWidget(QWidget):
     def _tick(self) -> None:
         if self._paused:
             return
-        self._angle = (self._angle + 0.6) % 360
+        # Makoma calm: slow drift, never snappy. ~0.35 deg/tick at 15 fps.
+        self._angle = (self._angle + 0.35) % 360
         for p in self._particles:
-            p["x"] = (p["x"] + p["dx"]) % 1.0
-            p["y"] = (p["y"] + p["dy"]) % 1.0
+            p["x"] = (p["x"] + p["dx"] * 0.6) % 1.0
+            p["y"] = (p["y"] + p["dy"] * 0.6) % 1.0
         self.update()
 
     def _core_center(self):
-        # The core sits in the left panel: ~20% across, ~38% down.
-        return self.width() * 0.20, self.height() * 0.38
+        # The face sits in the left panel: ~20% across, ~37% down.
+        return self.width() * 0.20, self.height() * 0.37
 
     def paintEvent(self, event) -> None:  # noqa: N802 - Qt naming
         painter = QPainter(self)
@@ -127,8 +141,8 @@ class HudBackgroundWidget(QWidget):
             painter.setBrush(_alpha(ACCENT, 10))
             painter.drawEllipse(int(cx - r), int(cy - r), int(r * 2), int(r * 2))
 
-        # Faint grid.
-        painter.setPen(QPen(_alpha(ACCENT_SOFT, 12), 1))
+        # Faint grid — even fainter now (makoma restraint).
+        painter.setPen(QPen(_alpha(ACCENT_SOFT, 8), 1))
         for x in range(0, w, 44):
             painter.drawLine(x, 0, x, h)
         for y in range(0, h, 44):
@@ -147,13 +161,13 @@ class HudBackgroundWidget(QWidget):
                 x2, y2 = points[(k + 1) % 6]
                 painter.drawLine(int(x1), int(y1), int(x2), int(y2))
 
-        # Slow rotating glowing rings around the core.
+        # Slow rotating glowing rings around the core, softer now.
         for radius, span, color, width, speed in (
             (190, 110, ACCENT, 2, 1.0),
             (240, 70, CYAN, 1, -0.7),
             (290, 140, ACCENT_SOFT, 1, 0.45),
         ):
-            painter.setPen(QPen(_alpha(color, 45), width))
+            painter.setPen(QPen(_alpha(color, 30), width))
             painter.setBrush(Qt.NoBrush)
             start = int((self._angle * speed) % 360 * 16)
             painter.drawArc(
@@ -180,33 +194,38 @@ class HudBackgroundWidget(QWidget):
             )
 
 
-# --- JARVIS core (the bot "face") -------------------------------------------
-class HudCoreWidget(QWidget):
-    """Glowing arc-reactor core. This IS the bot face — no smiley.
+# --- Aries robot face ---------------------------------------------------------
+class AriesFaceWidget(QWidget):
+    """A real animated robot face — the bot's head, not a radar.
 
-    A living head, not a static ring:
-    - Breathing: the core gently swells and bobs, always, even idle.
-    - Look-around: every few seconds the gaze drifts to a random
+    Rounded robot head with glowing purple edges, two LARGE glowing
+    cyan eyes with pupils, and a mouth that actually moves:
+    - idle: relaxed eyes, small smile
+    - thinking / listening: eyes narrow slightly and look up, mouth
+      a small "o" (like it is concentrating)
+    - speaking: mouth opens/closes with the reply, plus small
+      equaliser bars under it; eyes bright
+    - error: eyes dim, mouth flat
+
+    It stays a living head, like the 0.2.2 core:
+    - Breathing: the head gently swells and bobs, always, even idle.
+    - Look-around: every few seconds the pupils drift to a random
       point and back, like a head turning to look at something.
-    - Cursor gaze: when the mouse is over/near this window the core
-      looks toward the cursor, smoothly (never a snap). Hovering
-      brightens it, like it noticed you.
-    - Blink: every few seconds a quick dimming pulse, like a blink.
-    - States: "idle" (slow pulse, slow rings), "listening"/"thinking"
-      (faster spin, brighter core, expanding ripple, faster
-      look-around), "speaking" (pulsing waveform bars around the
-      core, plus a slight bob).
+    - Cursor gaze: when the mouse is over/near this window the eyes
+      look toward the cursor, smoothly (never a snap). Hovering
+      brightens the face, like it noticed you.
+    - Blink: every few seconds the eyes close and open quickly.
 
     All animation is capped at ~16 fps. While ``_dragging`` is set
-    (mini window being dragged) the paint path is cheap — fewer
-    glow layers — so dragging stays smooth.
+    (mini window being dragged) the paint path is cheap — no halo
+    arcs, fewer glow layers — so dragging stays smooth.
     Callers can also drive the gaze directly with
     :meth:`set_cursor_gaze` (values in -1..1).
     """
 
-    STATES = {"idle", "listening", "thinking", "speaking"}
+    STATES = {"idle", "listening", "thinking", "speaking", "error"}
 
-    def __init__(self, diameter: int = 260, parent: QWidget | None = None) -> None:
+    def __init__(self, diameter: int = 320, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setFixedSize(diameter, diameter)
         self.setMouseTracking(True)
@@ -215,7 +234,8 @@ class HudCoreWidget(QWidget):
         self._angle = 0.0
         self._pulse = 0.0
         self._ripple = 0.0
-        self._bars = [0.4] * 24
+        self._bars = [0.4] * 5
+        self._mouth_open = 0.0
         # Gaze: current (smoothed) and target, each (x, y) in -1..1.
         self._gaze = (0.0, 0.0)
         self._gaze_target = (0.0, 0.0)
@@ -285,7 +305,7 @@ class HudCoreWidget(QWidget):
         # Near = inside the widget, or within ~80 px of it.
         near = (-80 <= local.x() <= self.width() + 80
                 and -80 <= local.y() <= self.height() + 80)
-        # Hovering brightens the core, like it noticed the cursor.
+        # Hovering brightens the face, like it noticed the cursor.
         self._hover = (-10 <= local.x() <= self.width() + 10
                        and -10 <= local.y() <= self.height() + 10)
         if not near:
@@ -297,16 +317,22 @@ class HudCoreWidget(QWidget):
         return True
 
     def _animate(self) -> None:
-        speed = {"idle": 1.2, "listening": 5.0, "thinking": 5.0, "speaking": 2.5}
+        speed = {"idle": 1.2, "listening": 5.0, "thinking": 5.0,
+                 "speaking": 2.5, "error": 0.5}
         self._angle = (self._angle + speed[self._state]) % 360
         self._pulse += 0.12
         if self._state in {"listening", "thinking"}:
             self._ripple = (self._ripple + 0.03) % 1.0
         if self._state == "speaking":
+            # Mouth opens/closes with the reply; bars pulse with it.
+            self._mouth_open = 0.35 + 0.65 * abs(
+                math.sin(self._pulse * 1.9))
             self._bars = [
-                0.35 + 0.65 * abs(math.sin(self._pulse * 1.7 + k * 0.9))
-                for k in range(24)
+                0.3 + 0.7 * abs(math.sin(self._pulse * 2.1 + k * 1.3))
+                for k in range(5)
             ]
+        else:
+            self._mouth_open = max(0.0, self._mouth_open - 0.2)
         # Gaze: cursor wins when near, otherwise idle look-around.
         # Thinking/listening look around faster, like searching.
         cursor_driving = self._update_gaze_from_cursor()
@@ -338,104 +364,191 @@ class HudCoreWidget(QWidget):
     def paintEvent(self, event) -> None:  # noqa: N802 - Qt naming
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
-        # Head movement: the whole core shifts a few px with the gaze
-        # (like a head turning) and bobs gently with the breath.
-        # Blink dims the core, like eyelids closing.
+        D = float(self._diameter)
+        # Breathing: the head gently swells and bobs, always.
         breathe = math.sin(self._pulse)
         bob = 2.0 * breathe + (1.5 * math.sin(self._pulse * 1.7)
                                if self._state == "speaking" else 0.0)
         gx, gy = self._gaze
-        cx = self._diameter / 2.0 + gx * self._diameter * 0.06
-        cy = self._diameter / 2.0 + gy * self._diameter * 0.06 + bob
-        r = self._diameter / 2.0 - 6
-        bright = self._state in {"listening", "thinking"} or self._hover
-        dim = 1.0 - 0.55 * self._blink  # blink dims the core
+        # The whole head shifts a few px with the gaze (head-turn
+        # feel) and bobs with the breath. Blink dims the face.
+        cx = D / 2.0 + gx * D * 0.04
+        cy = D / 2.0 + gy * D * 0.03 + bob
+        scale = 1.0 + 0.02 * breathe
+        bright = self._state in {"listening", "thinking", "speaking"} or self._hover
+        dim = 1.0 - 0.55 * self._blink
+        if self._state == "error":
+            dim *= 0.6
 
-        # Outer glow. While dragging, only 2 cheap layers (no stutter).
-        glow_layers = 2 if self._dragging else 5
+        # --- Head geometry (all relative to D) ---
+        hw = D * 0.82 * scale  # head width
+        hh = D * 0.76 * scale  # head height
+        hx = cx - hw / 2.0
+        hy = cy - hh / 2.0
+        eye_y = hy + hh * 0.32
+        eye_w = D * 0.20
+        eye_h = D * 0.115
+        if self._state in {"listening", "thinking"}:
+            eye_h *= 0.72  # narrowed, concentrating eyes
+        eye_h *= max(0.08, 1.0 - self._blink)  # blink closes the eyes
+        eye_dx = D * 0.20
+        mouth_y = hy + hh * 0.66
+
+        # --- Halo ring behind the head (subtle HUD accent) ---
+        if not self._dragging:
+            painter.setPen(QPen(_alpha(ACCENT_SOFT, 45), 1))
+            painter.setBrush(Qt.NoBrush)
+            for radius, span, color, width, direction in (
+                (D * 0.47, 90, CYAN, 2, 1.0),
+                (D * 0.50, 60, ACCENT, 1, -0.8),
+            ):
+                start = int(((self._angle * direction) % 360) * 16)
+                painter.drawArc(
+                    int(cx - radius), int(cy - radius),
+                    int(radius * 2), int(radius * 2),
+                    start, int(span * 16),
+                )
+            # Expanding ripple while thinking / listening.
+            if self._state in {"listening", "thinking"}:
+                rr = D * 0.30 * (0.45 + 0.55 * self._ripple)
+                painter.setPen(QPen(_alpha(CYAN, int(60 * (1 - self._ripple))), 2))
+                painter.drawEllipse(int(cx - rr), int(cy - rr),
+                                    int(rr * 2), int(rr * 2))
+
+        # --- Glow behind the head ---
+        glow_layers = 1 if self._dragging else 3
         for i in range(glow_layers, 0, -1):
             painter.setPen(Qt.NoPen)
-            painter.setBrush(_alpha(ACCENT, int((8 if not bright else 12) * dim)))
-            gr = r * (0.55 + 0.11 * i)
-            painter.drawEllipse(int(cx - gr), int(cy - gr), int(gr * 2), int(gr * 2))
-
-        # Expanding ripple while thinking / listening.
-        if self._state in {"listening", "thinking"}:
-            rr = r * (0.45 + 0.55 * self._ripple)
-            painter.setPen(QPen(_alpha(CYAN, int(70 * (1 - self._ripple))), 2))
-            painter.setBrush(Qt.NoBrush)
-            painter.drawEllipse(int(cx - rr), int(cy - rr), int(rr * 2), int(rr * 2))
-
-        # Outer ring + tick marks.
-        painter.setPen(QPen(_alpha(ACCENT, 160), 2))
-        painter.setBrush(Qt.NoBrush)
-        painter.drawEllipse(int(cx - r), int(cy - r), int(r * 2), int(r * 2))
-        painter.setPen(QPen(_alpha(ACCENT_SOFT, 120), 1))
-        for k in range(48):
-            a = math.radians(k * 7.5)
-            r1, r2 = r - 4, r - 9 if k % 6 == 0 else r - 7
-            painter.drawLine(
-                int(cx + r1 * math.cos(a)), int(cy + r1 * math.sin(a)),
-                int(cx + r2 * math.cos(a)), int(cy + r2 * math.sin(a)),
+            painter.setBrush(_alpha(ACCENT, int((10 if not bright else 14) * dim)))
+            gr = hw * (0.55 + 0.08 * i)
+            painter.drawRoundedRect(
+                int(cx - gr), int(cy - gr * 0.9),
+                int(gr * 2), int(gr * 1.8),
+                40, 40,
             )
 
-        # Concentric rotating arcs.
-        for radius, span, color, width, direction in (
-            (r * 0.88, 80, CYAN, 3, 1.0),
-            (r * 0.74, 130, ACCENT, 2, -0.8),
-            (r * 0.60, 55, ACCENT_SOFT, 2, 1.4),
-        ):
-            painter.setPen(QPen(_alpha(color, 190), width))
-            painter.setBrush(Qt.NoBrush)
-            start = int(((self._angle * direction) % 360) * 16)
-            painter.drawArc(
-                int(cx - radius), int(cy - radius),
-                int(radius * 2), int(radius * 2),
-                start, int(span * 16),
-            )
-
-        # Waveform bars while speaking.
-        if self._state == "speaking":
-            painter.setPen(QPen(_alpha(CYAN, 200), 3))
-            for k, level in enumerate(self._bars):
-                a = math.radians(k * 15)
-                r1 = r * 0.46
-                r2 = r1 + r * 0.20 * level
-                painter.drawLine(
-                    int(cx + r1 * math.cos(a)), int(cy + r1 * math.sin(a)),
-                    int(cx + r2 * math.cos(a)), int(cy + r2 * math.sin(a)),
-                )
-
-        # Pulsing core (breathing: it swells a little with the pulse).
-        core_r = r * 0.34 * (1 + 0.06 * math.sin(self._pulse)) * dim
-        if bright:
-            core_r *= 1.08
-        core_glow = 2 if self._dragging else 4
-        for i in range(core_glow, 0, -1):
-            painter.setPen(Qt.NoPen)
-            painter.setBrush(_alpha(CYAN if i % 2 == 0 else ACCENT, 26))
-            gr = core_r * (0.55 + 0.22 * i)
-            painter.drawEllipse(int(cx - gr), int(cy - gr), int(gr * 2), int(gr * 2))
-        painter.setPen(QPen(_alpha(ACCENT_SOFT, int(220 * dim)), 2))
-        painter.setBrush(_alpha("#2a0a4a", int(220 * dim)))
-        painter.drawEllipse(
-            int(cx - core_r), int(cy - core_r),
-            int(core_r * 2), int(core_r * 2),
-        )
-        # Core centre dot — the "pupil". It looks where the gaze
-        # points, shifted a little further than the core itself.
+        # --- Antenna (with glowing tip) ---
+        painter.setPen(QPen(_alpha(ACCENT_SOFT, int(200 * dim)), 3))
+        painter.drawLine(int(cx), int(hy), int(cx), int(hy - D * 0.06))
         painter.setPen(Qt.NoPen)
-        painter.setBrush(_alpha(CYAN, int((255 if bright else 200) * dim)))
-        dot = max(4.0, core_r * 0.22)
-        dot_x = cx + gx * r * 0.12
-        dot_y = cy + gy * r * 0.12
-        painter.drawEllipse(int(dot_x - dot), int(dot_y - dot),
-                            int(dot * 2), int(dot * 2))
+        painter.setBrush(_alpha(CYAN, int(255 * dim)))
+        tip = max(3.0, D * 0.012)
+        painter.drawEllipse(int(cx - tip), int(hy - D * 0.06 - tip),
+                            int(tip * 2), int(tip * 2))
+
+        # --- Ears (side plates) ---
+        painter.setPen(QPen(_alpha(ACCENT, int(180 * dim)), 2))
+        painter.setBrush(_alpha(PANEL, int(220 * dim)))
+        ear_w, ear_h = D * 0.045, D * 0.16
+        painter.drawRoundedRect(int(hx - ear_w), int(eye_y - ear_h / 2),
+                                int(ear_w), int(ear_h), 6, 6)
+        painter.drawRoundedRect(int(hx + hw), int(eye_y - ear_h / 2),
+                                int(ear_w), int(ear_h), 6, 6)
+
+        # --- Head outline + face plate ---
+        painter.setPen(QPen(_alpha(ACCENT, int(230 * dim)), 3))
+        painter.setBrush(_alpha("#1a0026", int(235 * dim)))
+        painter.drawRoundedRect(int(hx), int(hy), int(hw), int(hh),
+                                int(D * 0.14), int(D * 0.14))
+        painter.setPen(QPen(_alpha(ACCENT_SOFT, int(60 * dim)), 1))
+        painter.setBrush(Qt.NoBrush)
+        painter.drawRoundedRect(int(hx + 10), int(hy + 10),
+                                int(hw - 20), int(hh - 20),
+                                int(D * 0.11), int(D * 0.11))
+
+        # --- Eyebrows (expression) ---
+        painter.setPen(QPen(_alpha(ACCENT_SOFT, int(200 * dim)), 2))
+        brow_y = eye_y - eye_h - D * 0.03
+        lift = D * 0.012 if self._state in {"listening", "thinking"} else 0.0
+        for sign in (-1, 1):
+            ex = cx + sign * eye_dx
+            # Inner end lifts when thinking, like raised brows.
+            painter.drawLine(
+                int(ex - sign * eye_w * 0.45), int(brow_y + lift),
+                int(ex + sign * eye_w * 0.45), int(brow_y),
+            )
+
+        # --- Eyes: large, glowing, pupils that follow the cursor ---
+        for sign in (-1, 1):
+            ex = cx + sign * eye_dx
+            # Glow behind the eye.
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(_alpha(CYAN, int(45 * dim)))
+            painter.drawEllipse(int(ex - eye_w * 0.62), int(eye_y - eye_h * 0.62),
+                                int(eye_w * 1.24), int(eye_h * 1.24))
+            # Eye itself.
+            painter.setPen(QPen(_alpha(ACCENT_SOFT, int(200 * dim)), 2))
+            painter.setBrush(_alpha(CYAN, int((235 if bright else 190) * dim)))
+            painter.drawEllipse(int(ex - eye_w / 2), int(eye_y - eye_h / 2),
+                                int(eye_w), int(eye_h))
+            # Pupil — looks where the gaze points.
+            px = ex + gx * eye_w * 0.22
+            py = eye_y + gy * eye_h * 0.25
+            if self._state in {"listening", "thinking"}:
+                py -= D * 0.008  # eyes look up while thinking
+            pr = max(3.0, eye_w * 0.20)
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(_alpha("#0d0010", int(255 * dim)))
+            painter.drawEllipse(int(px - pr), int(py - pr),
+                                int(pr * 2), int(pr * 2))
+            # Highlight dot on the pupil.
+            painter.setBrush(_alpha("#ffffff", int(230 * dim)))
+            hr = max(1.5, pr * 0.35)
+            painter.drawEllipse(int(px - pr * 0.3 - hr), int(py - pr * 0.3 - hr),
+                                int(hr * 2), int(hr * 2))
+
+        # --- Mouth: actually moves ---
+        painter.setPen(QPen(_alpha(ACCENT_SOFT, int(220 * dim)), 2))
+        if self._state == "speaking":
+            # Open mouth, size follows the reply.
+            mw = D * 0.20
+            mh = max(4.0, D * 0.02 + self._mouth_open * D * 0.075)
+            painter.setBrush(_alpha(ACCENT, int(220 * dim)))
+            painter.drawEllipse(int(cx - mw / 2), int(mouth_y - mh / 2),
+                                int(mw), int(mh))
+            # Equaliser bars under the mouth while speaking.
+            painter.setPen(QPen(_alpha(CYAN, 200), 2))
+            bar_y = mouth_y + D * 0.075
+            for k, level in enumerate(self._bars):
+                bx = cx + (k - 2) * D * 0.045
+                bh = D * 0.012 + level * D * 0.035
+                painter.drawLine(int(bx), int(bar_y),
+                                 int(bx), int(bar_y + bh))
+        elif self._state in {"listening", "thinking"}:
+            # Small "o" — concentrating.
+            painter.setBrush(Qt.NoBrush)
+            painter.drawEllipse(int(cx - D * 0.035), int(mouth_y - D * 0.04),
+                                int(D * 0.07), int(D * 0.08))
+        elif self._state == "error":
+            # Flat line.
+            painter.drawLine(int(cx - D * 0.09), int(mouth_y),
+                             int(cx + D * 0.09), int(mouth_y))
+        else:
+            # Idle smile.
+            painter.setBrush(Qt.NoBrush)
+            painter.drawArc(int(cx - D * 0.09), int(mouth_y - D * 0.03),
+                            int(D * 0.18), int(D * 0.09), 180 * 16, 180 * 16)
+
+        # --- Status LED (bottom corner of the head) ---
+        led_color = ERROR_RED if self._state == "error" else (
+            CYAN if self._state in {"listening", "thinking", "speaking"}
+            else ACCENT_SOFT)
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(_alpha(led_color, int(230 * dim)))
+        lr = max(3.0, D * 0.012)
+        painter.drawEllipse(int(hx + hw - D * 0.055 - lr),
+                            int(hy + hh - D * 0.055 - lr),
+                            int(lr * 2), int(lr * 2))
+
+
+# Backwards-compatible alias: the old name was HudCoreWidget.
+HudCoreWidget = AriesFaceWidget
 
 
 # --- HUD panel frame -----------------------------------------------------------
 class HudFrame(QWidget):
-    """Panel with a thin glowing border and corner brackets."""
+    """Panel, makoma-style: soft corners, one thin hairline border,
+    no heavy shadows, no corner brackets, no chrome."""
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -445,19 +558,9 @@ class HudFrame(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
         rect = self.rect().adjusted(1, 1, -1, -1)
-        painter.setPen(QPen(_alpha(ACCENT, 70), 1))
+        painter.setPen(QPen(_alpha(ACCENT_SOFT, 45), 1))
         painter.setBrush(QColor(PANEL_SEMI))
-        painter.drawRect(rect)
-        # Corner brackets.
-        painter.setPen(QPen(QColor(ACCENT), 2))
-        L = 18
-        x0, y0, x1, y1 = rect.left(), rect.top(), rect.right(), rect.bottom()
-        for (sx, sy, dx, dy) in (
-            (x0, y0, 1, 1), (x1, y0, -1, 1),
-            (x0, y1, 1, -1), (x1, y1, -1, -1),
-        ):
-            painter.drawLine(sx, sy, sx + dx * L, sy)
-            painter.drawLine(sx, sy, sx, sy + dy * L)
+        painter.drawRoundedRect(rect, 18, 18)
 
 
 # --- LLM worker ---------------------------------------------------------------
@@ -483,13 +586,13 @@ class ChatWorker(QObject):
 
 # --- Mini mode (stub) ----------------------------------------------------------
 class MiniWindow(QWidget):
-    """Small always-on-top window with the SAME JARVIS core.
+    """Small always-on-top window with the SAME robot face.
 
-    Stub for full mini mode (later module): core, greeting, status,
-    and a button to come back. The core shows the same states
+    Stub for full mini mode (later module): face, greeting, status,
+    and a button to come back. The face shows the same states
     (idle / thinking / speaking) as the main window, and is just as
     lively — breathing, blinking, looking around, following the
-    cursor with its gaze.
+    cursor with its gaze, mouth moving when it speaks.
 
     Smooth dragging (0.2.2): the old version had no drag handling
     at all, so a drag fell back to the OS moving a window whose core
@@ -516,7 +619,7 @@ class MiniWindow(QWidget):
             Qt.WindowStaysOnTopHint | Qt.Tool | Qt.Window,
         )
         self.setWindowTitle("Aries — mini")
-        self.setFixedSize(280, 330)
+        self.setFixedSize(300, 360)
         self.setStyleSheet(f"background: {BG}; color: {TEXT};")
         self.setMouseTracking(True)
         self.setAttribute(Qt.WA_AlwaysShowToolTips, True)
@@ -524,23 +627,33 @@ class MiniWindow(QWidget):
         self._dragging = False
         self._user_moved = False
         self._docked = False
+        # Makoma in mini too: centred, breathing room, pill button.
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(14, 12, 14, 12)
-        self._core = HudCoreWidget(150, self)
+        layout.setContentsMargins(24, 24, 24, 24)
+        layout.setSpacing(12)
+        self._core = AriesFaceWidget(180, self)
         self._core.installEventFilter(self)
         layout.addWidget(self._core, alignment=Qt.AlignCenter)
-        label = QLabel(GREETING, self)
+        label = QLabel(
+            f'<div style="font-family: {SANS}; font-size: 16px; '
+            f'font-weight: bold; color: {TEXT};">Aries active.</div>'
+            f'<div style="font-family: {SERIF}; font-size: 16px; '
+            f'font-style: italic; color: {CREAM};">Ready to cook.</div>'
+        )
         label.setWordWrap(True)
         label.setAlignment(Qt.AlignCenter)
-        label.setStyleSheet(f"color: {ACCENT_SOFT}; font-weight: bold;")
         layout.addWidget(label)
-        self._status = QLabel("Ready", self)
+        self._status = QLabel("READY", self)
         self._status.setAlignment(Qt.AlignCenter)
-        self._status.setStyleSheet(f"color: {MUTED}; font-family: {MONO};")
+        self._status.setStyleSheet(
+            f"color: {MUTED}; font-family: {MONO}; letter-spacing: 3px;"
+        )
         layout.addWidget(self._status)
         restore = QPushButton("Back to full Aries", self)
+        restore.setMinimumHeight(44)
         restore.setStyleSheet(
-            f"background: {ACCENT}; color: white; padding: 6px; border-radius: 6px;"
+            f"background: {ACCENT}; color: white; padding: 8px 18px;"
+            "border: none; border-radius: 22px; font-weight: bold;"
         )
         restore.clicked.connect(self.close)
         layout.addWidget(restore)
@@ -630,8 +743,9 @@ class MiniWindow(QWidget):
         """Mirror the main window's core state."""
         self._core.set_state(state)
         self._status.setText(
-            {"idle": "Ready", "listening": "Listening…",
-             "thinking": "Thinking…", "speaking": "Speaking…"}.get(state, state)
+            {"idle": "READY", "listening": "LISTENING",
+             "thinking": "THINKING", "speaking": "SPEAKING"}.get(
+                state, state.upper())
         )
 
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt naming
@@ -647,8 +761,8 @@ class AriesWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("Aries")
-        self.setMinimumSize(820, 600)
-        self.resize(960, 660)
+        self.setMinimumSize(960, 640)
+        self.resize(1080, 720)
         self._history: list[dict[str, str]] = [
             {"role": "system", "content": SYSTEM_PROMPT}
         ]
@@ -678,45 +792,55 @@ class AriesWindow(QMainWindow):
         overlay = QWidget(central)
         overlay.setGeometry(central.rect())
         overlay.setStyleSheet("background: transparent;")
+        # Makoma layout: generous whitespace, one object per panel.
         root = QHBoxLayout(overlay)
-        root.setContentsMargins(14, 14, 14, 14)
-        root.setSpacing(12)
+        root.setContentsMargins(28, 28, 28, 28)
+        root.setSpacing(24)
 
-        # ---- Left: core + status readouts --------------------------------
+        # ---- Left: face as the one object, centred, breathing room ------
         left = HudFrame(overlay)
-        left.setFixedWidth(340)
+        left.setFixedWidth(440)
         left_layout = QVBoxLayout(left)
-        left_layout.setContentsMargins(16, 14, 16, 14)
-        left_layout.setSpacing(8)
+        left_layout.setContentsMargins(28, 28, 28, 28)
+        left_layout.setSpacing(14)
 
-        title = QLabel("A R I E S", self)
+        title = QLabel("ARIES", self)
         title.setStyleSheet(
-            f"color: {ACCENT_SOFT}; font-size: 26px; font-weight: bold;"
-            f"letter-spacing: 4px; font-family: {MONO};"
+            f"color: {MUTED}; font-size: 13px; font-weight: bold;"
+            f"letter-spacing: 6px; font-family: {SANS};"
         )
         title.setAlignment(Qt.AlignCenter)
         left_layout.addWidget(title)
-        sub = QLabel(GREETING, self)
-        sub.setStyleSheet(f"color: {TEXT}; font-size: 12px;")
-        sub.setWordWrap(True)
-        sub.setAlignment(Qt.AlignCenter)
-        left_layout.addWidget(sub)
 
-        self._core = HudCoreWidget(250, self)
+        # Makoma typography pairing: bold geometric sans for the
+        # statement, italic serif in cream for the emotional word.
+        greet = QLabel(
+            f'<div style="font-family: {SANS}; font-size: 22px; '
+            f'font-weight: bold; color: {TEXT};">Aries active.</div>'
+            f'<div style="font-family: {SERIF}; font-size: 22px; '
+            f'font-style: italic; color: {CREAM};">Ready to cook.</div>'
+        )
+        greet.setAlignment(Qt.AlignCenter)
+        greet.setWordWrap(True)
+        left_layout.addWidget(greet)
+
+        self._core = AriesFaceWidget(320, self)
         left_layout.addWidget(self._core, alignment=Qt.AlignCenter)
 
-        # Real status readouts only: time, model, key, state.
-        self._status = QLabel("STATUS  Ready", self)
+        # Tiny uppercase letterspaced labels, quiet — makoma eyebrows.
+        self._status = QLabel("READY", self)
         self._clock = QLabel("TIME  --:--:--", self)
         model_short = CHAT_MODEL.split("/")[-1]
         self._model = QLabel(f"MODEL  {model_short}", self)
         self._model.setToolTip(CHAT_MODEL)
-        self._key_label = QLabel("KEY  checking…", self)
+        self._key_label = QLabel("KEY  CHECKING…", self)
         for lbl in (self._status, self._clock, self._model, self._key_label):
             lbl.setStyleSheet(
-                f"color: {ACCENT_SOFT}; font-size: 11px; font-family: {MONO};"
+                f"color: {MUTED}; font-size: 11px; font-family: {MONO};"
+                "letter-spacing: 3px;"
             )
             lbl.setWordWrap(True)
+            lbl.setAlignment(Qt.AlignCenter)
             left_layout.addWidget(lbl)
         left_layout.addStretch(1)
 
@@ -728,58 +852,65 @@ class AriesWindow(QMainWindow):
         self._mini_btn.setObjectName("mini_btn")
         self._mini_btn.clicked.connect(self._open_mini)
         for btn in (self._bg_btn, self._mini_btn):
+            # Pill controls: fully rounded, thin hairline border.
             btn.setStyleSheet(
-                f"background: {PANEL}; color: {TEXT}; padding: 6px 10px;"
-                f"border: 1px solid {ACCENT}; border-radius: 6px;"
+                f"background: transparent; color: {TEXT}; "
+                "padding: 10px 18px; "
+                f"border: 1px solid {ACCENT_SOFT}; border-radius: 20px;"
             )
             left_layout.addWidget(btn)
         root.addWidget(left)
 
-        # ---- Right: chat HUD panel ---------------------------------------
+        # ---- Right: chat panel, clean and calm ---------------------------
         right = HudFrame(overlay)
         right_layout = QVBoxLayout(right)
-        right_layout.setContentsMargins(14, 12, 14, 12)
-        right_layout.setSpacing(10)
-        header = QLabel("// COMMS LINK — ARIES", self)
+        right_layout.setContentsMargins(24, 24, 24, 24)
+        right_layout.setSpacing(16)
+        header = QLabel("CONVERSATION", self)
         header.setStyleSheet(
             f"color: {MUTED}; font-size: 11px; font-family: {MONO};"
-            "letter-spacing: 2px;"
+            "letter-spacing: 4px;"
         )
+        header.setAlignment(Qt.AlignCenter)
         right_layout.addWidget(header)
 
         self._chat = QTextEdit(self)
         self._chat.setObjectName("chat")
         self._chat.setReadOnly(True)
         self._chat.setStyleSheet(
-            f"background: transparent; color: {TEXT}; font-size: 13px;"
-            "border: none; padding: 4px;"
+            f"background: transparent; color: {TEXT}; font-size: 15px;"
+            "border: none; padding: 8px; line-height: 1.6;"
         )
         right_layout.addWidget(self._chat, stretch=1)
 
         bottom = QHBoxLayout()
+        bottom.setSpacing(10)
         self._input = QLineEdit(self)
         self._input.setObjectName("input")
         self._input.setPlaceholderText("Type a message…")
+        self._input.setMinimumHeight(48)
         self._input.setStyleSheet(
-            f"background: {PANEL_SEMI}; color: {TEXT}; padding: 8px;"
-            f"border: 1px solid {ACCENT}; border-radius: 6px;"
+            f"background: {PANEL_SEMI}; color: {TEXT}; padding: 8px 18px;"
+            f"border: 1px solid {ACCENT_SOFT}; border-radius: 24px;"
         )
         self._input.returnPressed.connect(self._on_send)
         bottom.addWidget(self._input, stretch=1)
         self._send_btn = QPushButton("Send", self)
         self._send_btn.setObjectName("send_btn")
+        self._send_btn.setMinimumHeight(48)
         self._send_btn.setStyleSheet(
-            f"background: {ACCENT}; color: white; padding: 8px 16px;"
-            "border: none; border-radius: 6px; font-weight: bold;"
+            f"background: {ACCENT}; color: white; padding: 8px 24px;"
+            "border: none; border-radius: 24px; font-weight: bold;"
         )
         self._send_btn.clicked.connect(self._on_send)
         bottom.addWidget(self._send_btn)
 
         self._retry_btn = QPushButton("Check key again", self)
         self._retry_btn.setObjectName("retry_btn")
+        self._retry_btn.setMinimumHeight(48)
         self._retry_btn.setStyleSheet(
-            f"background: {PANEL}; color: {TEXT}; padding: 8px;"
-            f"border: 1px solid {ACCENT}; border-radius: 6px;"
+            f"background: transparent; color: {TEXT}; padding: 8px 18px;"
+            f"border: 1px solid {ACCENT_SOFT}; border-radius: 24px;"
         )
         self._retry_btn.clicked.connect(self._check_key)
         self._retry_btn.hide()
@@ -836,7 +967,12 @@ class AriesWindow(QMainWindow):
         )
 
     def _set_status(self, text: str) -> None:
-        self._status.setText(f"STATUS  {text}")
+        # Tiny letterspaced label, with ONE rationed gold dot.
+        clean = text.replace("…", "").strip().upper()
+        self._status.setTextFormat(Qt.RichText)
+        self._status.setText(
+            f'<span style="color:{GOLD}">●</span>  {clean}'
+        )
 
     def _set_core_state(self, state: str) -> None:
         self._core.set_state(state)
@@ -881,9 +1017,10 @@ class AriesWindow(QMainWindow):
 
     def _on_error(self, message: str) -> None:
         self._append("Aries", f"Sorry — {message}")
-        self._set_core_state("idle")
+        self._set_core_state("error")
         self._set_busy(False)
         self._set_status("Error — try again")
+        QTimer.singleShot(1800, lambda: self._set_core_state("idle"))
 
     def _set_busy(self, busy: bool) -> None:
         self._input.setEnabled(not busy)

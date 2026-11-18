@@ -1,7 +1,7 @@
 # Aries
 
 Aries is a Python PC desktop AI companion. JARVIS-style HUD in deep
-purple, a glowing arc-reactor core, voice and face-recognition
+purple, a real animated robot face, voice and face-recognition
 login, a permissions system for sensitive actions, and a mini mode —
 built one module at a time.
 
@@ -24,15 +24,20 @@ built one module at a time.
   soft radial glow behind the core (~15 fps, **Pause background**
   button to save CPU / battery). The old green code rain is gone —
   the user said the background sucked, and he was right.
-- Glowing arc-reactor core instead of a smiley face (drawn with
-  QPainter, no image files): concentric rotating arcs, pulsing
-  core. States: idle (slow pulse, slow rings), thinking /
-  listening (faster spin, brighter core, expanding ripple),
-  speaking (waveform bars pulse around the core)
-- HUD layout: core + real status readouts on the left (current
+- A real robot face instead of a smiley face or a radar-like core
+  (drawn with QPainter, no image files): a big rounded robot head
+  with glowing purple edges, an antenna, two LARGE glowing cyan
+  eyes with pupils, and a mouth that moves. States: idle
+  (relaxed eyes, small smile), thinking / listening (eyes narrow
+  and look up, mouth a small "o"), speaking (mouth opens and
+  closes with the reply, plus equaliser bars), error (eyes dim,
+  mouth flat). The face is big and central — 320 px in a 400 px
+  left panel — not a small circle tucked in a sidebar.
+- HUD layout: face + real status readouts on the left (current
   time, model name, key set / not set, status), chat as a clean
   HUD panel with corner brackets on the right. No fake CPU / RAM
-  numbers — every readout is real.
+  numbers — every readout is real. The left panel is filled by
+  the face now, so there is far less empty black space.
 - Chat pane wired to the NVIDIA LLM, with conversation history.
   LLM calls run in a worker thread, so the UI never freezes;
   401 / 429 / 410 errors show in-chat in plain words, not as a crash
@@ -40,10 +45,10 @@ built one module at a time.
   the setup steps instead of crashing, with a **Check key again**
   button (no need to restart)
 - **Mini mode** button: switches to a small always-on-top window
-  with the SAME JARVIS core (not a smiley face), the greeting, and
-  a status line; the mini core mirrors the main core's states
-  (idle / thinking / speaking). **Back to full Aries** restores
-  the main window (stub — full mini mode is a later module)
+  with the SAME robot face (not a smiley face, not a radar core),
+  the greeting, and a status line; the mini face mirrors the main
+  face's states (idle / thinking / speaking). **Back to full Aries**
+  restores the main window (stub — full mini mode is a later module)
 
 ## What changed in 0.2.2 — lively core, smooth mini mode
 
@@ -70,6 +75,61 @@ built one module at a time.
   so the core is the lively JARVIS core described above. If a
   specific figure is sent later, the face can be reworked to
   match it.
+
+## What changed in 0.3.0 — a real robot face
+
+- The user watched the 0.2.2 UI on video and said the core/face
+  is the problem: it was a small circle (~150–250 px) tucked in
+  a narrow left sidebar, looking like a radar / loading spinner
+  — concentric arcs and a dot, not a face at all — with a huge
+  empty black chat panel and empty space under the left panel.
+  Chat itself worked fine, so the LLM, model and key handling
+  were not touched.
+- The core is now a **real animated robot face** (`AriesFaceWidget`,
+  `HudCoreWidget` kept as an alias): a big rounded robot head with
+  glowing purple edges, an antenna with a glowing tip, side ear
+  plates, two LARGE glowing cyan eyes with pupils, eyebrows, and
+  a mouth that smiles when idle, makes a small "o" when thinking,
+  and opens/closes when speaking (with equaliser bars). Eyes dim
+  and the mouth goes flat on error.
+- The face is **big and central**: 320 px in a 400 px left panel
+  (window 1040×700), with the ARIES title, greeting and status
+  readouts around it, so the left side is filled and the chat
+  panel no longer feels like a void.
+- It stays a living head: breathing (gentle swell and bob), blink
+  every few seconds, idle look-around, pupils following the mouse
+  cursor (eased, clamped, never snapping), hover brightens it,
+  faster look-around while thinking. Same face in mini mode
+  (180 px), which keeps its 0.2.2 behaviour: auto-dock
+  bottom-right, smooth dragging, always-on-top and active.
+
+## What changed in 0.3.1 — makoma.io styling, purple kept
+
+- The user chose "Keep my purple, add makoma's layout and style"
+  after pointing at https://makoma.io/ ("it looks cool asf").
+  Makoma's language, applied here: restraint — one object, one
+  idea per screen, huge whitespace, almost no chrome; centred
+  layout with generous padding (28 px margins, 24 px gaps);
+  bold geometric sans paired with an italic serif in cream for
+  the emotional word — "Aries active." in bold sans, "Ready to
+  cook." in italic serif; tiny uppercase letterspaced labels
+  for every state (READY / THINKING / LISTENING / SPEAKING,
+  TIME / MODEL / KEY); pill controls — fully rounded input,
+  Send and other buttons with thin 1px hairline borders and
+  soft 18 px panel corners, no heavy shadows, no corner
+  brackets; calm motion — background rings/particles slowed
+  and softened, glow/drift/fade only, nothing bounces or snaps.
+- Deliberately NOT changed: the purple palette (background
+  #0d0010, accent #7b2fff, cream-white text) and the v0.3.0
+  robot face — big rounded head, large glowing eyes, moving
+  mouth, lively breathing/blink/look-around/cursor gaze.
+  The only gold is one tiny rationed dot next to the status
+  label; purple stays dominant.
+- Same behaviour as 0.2.2/0.3.0: worker thread, key check,
+  401/429/410 in-chat errors, Pause background, mini mode
+  (same robot face, auto-dock bottom-right, smooth drag,
+  always-on-top) — mini mode got the same makoma treatment:
+  centred, more padding, the sans+serif greeting, pill button.
 
 Still to come: voice (Module 3), face-recognition login (Module 4),
 permissions system (Module 5), full mini mode (Module 6).
@@ -125,8 +185,8 @@ From the project folder, with the virtual environment activated:
 python -m aries.main
 ```
 
-That opens the desktop UI. You will see the JARVIS HUD, the glowing
-core, and `Aries active. Ready to cook.` in the chat pane.
+That opens the desktop UI. You will see the JARVIS HUD, the big
+robot face, and `Aries active. Ready to cook.` in the chat pane.
 Type in the box at the bottom and press Send (or Enter).
 
 For the old text-only chat loop instead:
@@ -149,8 +209,8 @@ aries/
   config.py      API key loading (env, then keyring), never prints the key
   llm.py         NVIDIA chat client, clear errors on 401 / 429 / 410
   main.py        Entry point: UI by default, --cli for the text loop
-  ui.py          PyQt5 window: JARVIS HUD background, arc-reactor
-                 core, chat pane, worker thread, mini-mode stub
+  ui.py          PyQt5 window: JARVIS HUD background, animated
+                 robot face, chat pane, worker thread, mini-mode stub
 requirements.txt
 README.md
 .gitignore       Secrets, virtual envs, face/voice data, build output
