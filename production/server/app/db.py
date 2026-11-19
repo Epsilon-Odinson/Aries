@@ -19,6 +19,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    UniqueConstraint,
     create_engine,
 )
 from sqlalchemy.orm import declarative_base, sessionmaker
@@ -126,6 +127,45 @@ class Screenshot(Base):
     width = Column(Integer, default=0)
     height = Column(Integer, default=0)
     description = Column(Text, default="")
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class Connection(Base):
+    """One connected third-party account (Gmail / Spotify).
+
+    OAuth tokens live here, in the private database — never in the repo,
+    never logged, never sent to the frontend. The API only reports
+    whether a service is connected and which account it is.
+    One row per (user, service).
+    """
+
+    __tablename__ = "connections"
+    __table_args__ = (UniqueConstraint("user_key", "service"),)
+    id = Column(Integer, primary_key=True)
+    user_key = Column(String(64), nullable=False, default="default")
+    service = Column(String(32), nullable=False)  # google | spotify
+    account_label = Column(String(256), default="")  # email or display name
+    access_token = Column(Text, default="")
+    refresh_token = Column(Text, default="")
+    token_type = Column(String(32), default="Bearer")
+    expires_at = Column(DateTime, nullable=True)
+    scope = Column(Text, default="")
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow)
+
+
+class OAuthState(Base):
+    """Short-lived OAuth `state` values (CSRF protection).
+
+    Created when a connect flow starts, consumed (deleted) on the
+    callback. Rows older than 15 minutes are stale and ignored.
+    """
+
+    __tablename__ = "oauth_states"
+    id = Column(Integer, primary_key=True)
+    service = Column(String(32), nullable=False)  # google | spotify
+    state = Column(String(128), unique=True, nullable=False)
+    redirect_uri = Column(Text, default="")  # must match the token exchange
     created_at = Column(DateTime, default=datetime.utcnow)
 
 

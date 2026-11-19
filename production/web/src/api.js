@@ -71,6 +71,12 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ capability, setting }),
     }),
+  // Connections (Settings → Connections). Tokens never leave the server;
+  // this only reports which services are connected and which account.
+  connections: () => call("/api/connections"),
+  connectUrl: (service) => `${BASE}/api/connections/${service}/connect`,
+  disconnectConnection: (service) =>
+    call(`/api/connections/${service}/disconnect`, { method: "POST" }),
   // Multipart endpoints use fetch directly (no JSON content-type).
   upload: async (path, form) => {
     const res = await fetch(`${BASE}${path}`, { method: "POST", body: form });

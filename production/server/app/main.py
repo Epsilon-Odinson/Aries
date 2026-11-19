@@ -8,7 +8,7 @@ Security rules (from the product decisions):
 - The NVIDIA API key lives ONLY in the NVIDIA_API_KEY env var on the
   server. It is never accepted from, or sent to, any client.
 - Permissions are enforced here, server-side; the UI is only a prompt.
-- Aries is private to Epsilon and a friend until it goes commercial.
+- Aries is private to Epsilon and Kelfy until it goes commercial.
   This build ships no public sign-up; add accounts before opening it.
 - No PC control in this build (no shell, no mouse/keyboard, no
   pyautogui). That is the LAST roadmap item and is not included here.
@@ -28,17 +28,19 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from PIL import Image
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from . import connections as conn_mod
 from . import face as face_mod
 from . import voice as voice_mod
 from .db import (
+    Connection,
     FaceEnrollment,
     Memory,
     Message,
@@ -75,7 +77,7 @@ app.add_middleware(
 
 init_db()
 
-USER = "default"  # Single-household build: Epsilon + a friend. Accounts land with commercial launch.
+USER = "default"  # Single-household build: Epsilon + Kelfy. Accounts land with commercial launch.
 
 # ---------------------------------------------------------------- health
 
@@ -674,6 +676,106 @@ def save_permission(body: PermissionIn, db: Session = Depends(get_db)):
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     return {"ok": True, "capability": body.capability, "setting": setting}
+
+
+# ---------------------------------------------------------------- connections (Gmail / Spotify OAuth)
+
+# Connect an account once in Settings → Connections; the skills that
+# need it (Gmail reading, Spotify playback) use the stored tokens.
+# Tokens are never returned to the frontend — /api/connections only
+# reports whether a service is connected and which account it is.
+# WhatsApp has no one-tap OAuth for a personal account, so it is listed
+# with an honest note instead of a fake Connect button (see
+# connections.status). The client IDs/secrets come from env vars only:
+# GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET, SPOTIFY_CLIENT_ID /
+# SPOTIFY_CLIENT_SECRET, plus APP_BASE_URL for the redirect URIs.
+
+
+@app.get("/api/connections")
+def list_connections(db: Session = Depends(get_db)):
+    return conn_mod.status(db, USER)
+
+
+@app.get("/api/connections/{service}/connect")
+def start_connect(service: str, request: Request, db: Session = Depends(get_db)):
+    if service not in ("google", "spotify"):
+        raise HTTPException(400, "Unknown service")
+    try:
+        if service == "google":
+            url = conn_mod.google_auth_url(db, request)
+        else:
+            url = conn_mod.spotify_auth_url(db, request)
+    except conn_mod.NotConfigured as exc:
+        raise HTTPException(503, str(exc)) from exc
+    return RedirectResponse(url, status_code=302)
+
+
+def _oauth_result_page(title: str, body: str, ok: bool) -> HTMLResponse:
+    # Opened in its own tab from Settings. Tells the user what happened,
+    # then tries to close itself (works when opened via window.open).
+    colour = "#b78bff" if ok else "#ff9d9d"
+    return HTMLResponse(
+        f"""<!DOCTYPE html><html><head><meta charset="utf-8">
+<title>{title}</title>
+<style>body{{background:#0d0010;color:#f6ecd9;font-family:system-ui,sans-serif;
+display:flex;min-height:100vh;align-items:center;justify-content:center;margin:0}}
+main{{text-align:center;max-width:420px;padding:2rem}}
+h1{{color:{colour};font-size:1.25rem}}p{{opacity:.8;line-height:1.6}}</style>
+</head><body><main><h1>{title}</h1><p>{body}</p>
+<p>You can close this tab and go back to Aries.</p></main>
+<script>setTimeout(function(){{ try {{ window.close(); }} catch (e) {{}} }}, 1800);</script>
+</body></html>"""
+    )
+
+
+@app.get("/api/connections/{service}/callback")
+def oauth_callback(
+    service: str,
+    request: Request,
+    code: str | None = None,
+    state: str | None = None,
+    error: str | None = None,
+    db: Session = Depends(get_db),
+):
+    if service not in ("google", "spotify"):
+        raise HTTPException(400, "Unknown service")
+    name = "Gmail" if service == "google" else "Spotify"
+    if error:
+        return _oauth_result_page(
+            f"{name} not connected",
+            "You declined the sign-in, or it was cancelled. Nothing was saved. "
+            "You can try again from Settings → Connections.",
+            ok=False,
+        )
+    if not code or not state:
+        return _oauth_result_page(
+            f"{name} not connected",
+            "The sign-in came back without the details Aries needs. Try again from Settings → Connections.",
+            ok=False,
+        )
+    try:
+        if service == "google":
+            label = conn_mod.handle_google_callback(db, request, code, state)
+        else:
+            label = conn_mod.handle_spotify_callback(db, request, code, state)
+    except conn_mod.NotConfigured as exc:
+        return _oauth_result_page(f"{name} not connected", str(exc), ok=False)
+    except conn_mod.ConnectionError as exc:
+        return _oauth_result_page(f"{name} not connected", str(exc), ok=False)
+    return _oauth_result_page(
+        f"{name} connected ✓",
+        f"Connected as {label}. Aries can now use your {name} account for its skills. "
+        "Go back to Aries and reopen Settings → Connections to see it.",
+        ok=True,
+    )
+
+
+@app.post("/api/connections/{service}/disconnect")
+def disconnect_connection(service: str, db: Session = Depends(get_db)):
+    if service not in ("google", "spotify"):
+        raise HTTPException(400, "Unknown service")
+    conn_mod.disconnect(db, USER, service)
+    return {"ok": True, "service": service}
 
 
 # ---------------------------------------------------------------- face login

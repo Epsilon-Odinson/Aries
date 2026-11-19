@@ -493,7 +493,23 @@ body.mini .stage { justify-content: flex-end; padding-bottom: 12.5rem; }
   letter-spacing: 0.06em;
   color: var(--cream);
 }
-/* The voice picker is a divider-separated block inside the Aries card. */
+/* Connections: one row per service — name + status on the left,
+   Connect / Disconnect on the right, hairline between rows. */
+.conn-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.85rem 0;
+  border-bottom: 1px solid var(--hairline);
+}
+.conn-row:last-of-type { border-bottom: none; }
+.conn-info { display: flex; flex-direction: column; gap: 0.15rem; min-width: 0; }
+.conn-info strong { color: var(--cream); font-size: 0.95rem; }
+.conn-status { font-size: 0.85rem; color: var(--purple-soft); font-weight: 600; }
+.conn-info .fine { margin: 0.15rem 0 0; }
+.conn-actions { flex-shrink: 0; }
+.conn-actions button { white-space: nowrap; }
 .voice-picker {
   margin-top: 1.5rem;
   padding-top: 0.25rem;

@@ -697,6 +697,82 @@ function VoicePicker({ elevenVoices, elevenConfigured, elevenDefaultId, elevenDe
   );
 }
 
+// Settings → Connections: link the accounts the skills need.
+// Gmail and Spotify use real OAuth — Connect opens the provider's
+// sign-in in a new tab; the server stores the tokens, and this UI only
+// ever sees "connected" and the account name. WhatsApp has no one-tap
+// sign-in for a personal account, so it is listed honestly with an
+// explanation instead of a fake Connect button.
+function ConnectionsSection() {
+  const [conns, setConns] = useState(null);
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const load = useCallback(async () => {
+    try {
+      setErr("");
+      setConns(await api.connections());
+    } catch (e) {
+      setErr(e.message || "Could not load connections.");
+    }
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  async function disconnect(service) {
+    const label = service === "google" ? "Gmail" : "Spotify";
+    if (!confirm(`Disconnect ${label}? Aries will no longer be able to use that account.`)) return;
+    setBusy(true);
+    try {
+      await api.disconnectConnection(service);
+      await load();
+    } catch (e) { setErr(e.message); }
+    setBusy(false);
+  }
+
+  const rows = conns ? [
+    { key: "google", desc: "Let Aries read and summarise your email.", ...conns.google },
+    { key: "spotify", desc: "Let Aries play your music.", ...conns.spotify },
+    { key: "whatsapp", desc: "Send and read your WhatsApp messages.", ...conns.whatsapp },
+  ] : [];
+
+  return (
+    <section>
+      <h3>Connections</h3>
+      <p className="fine">Connect an account once and the skills that need it just work. Aries keeps the sign-in on the server — your password and tokens never appear here.</p>
+      {err && <p className="notice">{err}</p>}
+      {!conns && !err && <p className="fine">Loading…</p>}
+      {rows.map((r) => (
+        <div key={r.key} className="conn-row">
+          <div className="conn-info">
+            <strong>{r.name}</strong>
+            <span className="conn-status">{r.connected ? `Connected${r.account ? ` — ${r.account}` : ""}` : "Not connected"}</span>
+            <span className="fine">{r.desc}</span>
+            {r.note && <span className="fine">{r.note}</span>}
+            {!r.connected && !r.note && !r.configured && (
+              <span className="fine">Not set up on the server yet — add the {r.key === "google" ? "Google" : "Spotify"} client in Render first (see below).</span>
+            )}
+          </div>
+          <div className="conn-actions">
+            {r.connected ? (
+              <button disabled={busy} onClick={() => disconnect(r.key)}>Disconnect</button>
+            ) : !r.note && (
+              <button
+                disabled={busy || !r.configured}
+                onClick={() => window.open(api.connectUrl(r.key), "_blank", "noopener")}
+              >
+                Connect
+              </button>
+            )}
+          </div>
+        </div>
+      ))}
+      <button disabled={busy} onClick={load}>Check again</button>
+      <p className="fine">Setting up Gmail or Spotify needs a free developer app first. In Google Cloud Console / Spotify Developer Dashboard, create an OAuth app and add these redirect URLs — {window.location.origin}/api/connections/google/callback and {window.location.origin}/api/connections/spotify/callback — then add the client ID and secret in Render (Environment) as GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET and SPOTIFY_CLIENT_ID / SPOTIFY_CLIENT_SECRET.</p>
+    </section>
+  );
+}
+
 function MoreSheet({ data, tab, setTab, onClose, useSearch, setUseSearch, talkBack, setTalkBack, wakeOn, setWakeOn, grain, setGrain, onBurst, elevenVoices, elevenConfigured, elevenDefaultId, elevenDefaultName }) {
   const [person, setPerson] = useState(data.personality);
   const [profile, setProfile] = useState(data.profile);
@@ -757,7 +833,7 @@ function MoreSheet({ data, tab, setTab, onClose, useSearch, setUseSearch, talkBa
     } catch (e) { setMsg(e.message); }
   }
 
-  const tabs = ["aries", "memory", "more"];
+  const tabs = ["aries", "memory", "more", "connections"];
   return (
     <div className="more-sheet" role="dialog" aria-label="Settings and more">
       <div className="more-head">
@@ -957,6 +1033,8 @@ function MoreSheet({ data, tab, setTab, onClose, useSearch, setUseSearch, talkBa
         </section>
         </>
       )}
+
+      {tab === "connections" && <ConnectionsSection />}
     </div>
   );
 }
