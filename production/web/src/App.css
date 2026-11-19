@@ -388,6 +388,13 @@ body.mini .stage { justify-content: flex-end; padding-bottom: 12.5rem; }
   border-radius: 999px; padding: 0.5rem 0.9rem; cursor: pointer; margin: 0.25rem 0.25rem 0.25rem 0;
 }
 .mem-list, .task-list { list-style: none; padding: 0; }
+.voice-list { list-style: none; padding: 0; }
+.voice-list li {
+  display: flex; justify-content: space-between; gap: 0.75rem; align-items: center;
+  border-bottom: 1px solid var(--hairline); padding: 0.6rem 0;
+}
+.voice-list li.on { border-left: 3px solid var(--purple); padding-left: 0.5rem; }
+.voice-list li > span { display: flex; gap: 0.4rem; align-items: center; flex-wrap: wrap; }
 .mem-list li, .task-list li {
   display: flex; justify-content: space-between; gap: 0.75rem; align-items: center;
   border-bottom: 1px solid var(--hairline); padding: 0.6rem 0;

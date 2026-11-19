@@ -31,10 +31,28 @@ if ("speechSynthesis" in window) {
   window.speechSynthesis.onvoiceschanged = loadVoices;
 }
 
+// The voice the user picked in Settings → Voice, stored per device
+// (voices differ by device, so this lives in localStorage, not the server).
+let savedVoiceName = null;
+try { savedVoiceName = window.localStorage.getItem("ariesVoice") || null; } catch { /* ignore */ }
+
+function setSavedVoiceName(name) {
+  savedVoiceName = name || null;
+  try {
+    if (name) window.localStorage.setItem("ariesVoice", name);
+    else window.localStorage.removeItem("ariesVoice");
+  } catch { /* ignore */ }
+}
+
 function pickVoice() {
   let vs = cachedVoices;
   if (!vs.length) {
     try { vs = window.speechSynthesis.getVoices() || []; } catch { vs = []; }
+  }
+  // The user's own pick wins when that voice exists on this device.
+  if (savedVoiceName) {
+    const chosen = vs.find((v) => v.name === savedVoiceName);
+    if (chosen) return chosen;
   }
   const isEnglish = (v) => /^en/i.test(v.lang || "");
   const lower = (v) => (v.name || "").toLowerCase();
@@ -532,6 +550,68 @@ function LockScreen({ data, onUnlock }) {
   );
 }
 
+// Let the user pick Aries' talk-back voice himself, from the voices on
+// this device. Tap Hear to try one, tap Use this voice to make Aries
+// speak with it. Saved per device in localStorage.
+function VoicePicker() {
+  const [voices, setVoices] = useState([]);
+  const [selected, setSelected] = useState(savedVoiceName);
+  const [previewing, setPreviewing] = useState("");
+
+  useEffect(() => {
+    const refresh = () => {
+      try {
+        const vs = (window.speechSynthesis.getVoices() || []).filter((v) => /^en/i.test(v.lang || ""));
+        setVoices(vs);
+      } catch { /* ignore */ }
+    };
+    refresh();
+    if ("speechSynthesis" in window) {
+      window.speechSynthesis.addEventListener("voiceschanged", refresh);
+      return () => window.speechSynthesis.removeEventListener("voiceschanged", refresh);
+    }
+  }, []);
+
+  const preview = (v) => {
+    if (!("speechSynthesis" in window)) return;
+    window.speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance("Aries active. Ready to cook.");
+    u.voice = v;
+    u.rate = 1;
+    u.pitch = 0.9;
+    setPreviewing(v.name);
+    u.onend = () => setPreviewing("");
+    u.onerror = () => setPreviewing("");
+    window.speechSynthesis.speak(u);
+  };
+
+  const choose = (name) => {
+    setSavedVoiceName(name);
+    setSelected(name);
+  };
+
+  return (
+    <section>
+      <h3>Talk-back voice</h3>
+      <p className="fine">These are the voices on this device. Tap Hear to try one, then tap Use this voice to make Aries speak with it. Your pick is saved on this device only.</p>
+      <p>Now using: <strong>{selected || "Aries' default (masculine)"}</strong></p>
+      <button onClick={() => choose(null)}>Use Aries' default</button>
+      {voices.length === 0 && <p>No English voices found on this device yet — try closing and reopening Settings.</p>}
+      <ul className="voice-list">
+        {voices.map((v) => (
+          <li key={v.name + v.lang} className={selected === v.name ? "on" : ""}>
+            <span>{v.name} <span className="fine">({v.lang})</span></span>
+            <span>
+              <button onClick={() => preview(v)}>{previewing === v.name ? "Playing…" : "Hear"}</button>
+              <button onClick={() => choose(v.name)}>{selected === v.name ? "✓ Using" : "Use this voice"}</button>
+            </span>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
 function MoreSheet({ data, tab, setTab, onClose }) {
   const [person, setPerson] = useState(data.personality);
   const [profile, setProfile] = useState(data.profile);
@@ -592,7 +672,7 @@ function MoreSheet({ data, tab, setTab, onClose }) {
     } catch (e) { setMsg(e.message); }
   }
 
-  const tabs = ["personality", "memory", "tasks", "permissions", "face", "screenshot", "history", "installer"];
+  const tabs = ["personality", "voice", "memory", "tasks", "permissions", "face", "screenshot", "history", "installer"];
   return (
     <div className="more-sheet" role="dialog" aria-label="Settings and more">
       <div className="more-head">
@@ -636,6 +716,8 @@ function MoreSheet({ data, tab, setTab, onClose }) {
           <button onClick={saveProfile}>Save profile</button>
         </section>
       )}
+
+      {tab === "voice" && <VoicePicker />}
 
       {tab === "memory" && (
         <section>
