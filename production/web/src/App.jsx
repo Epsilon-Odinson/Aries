@@ -899,7 +899,7 @@ function MoreSheet({ data, tab, setTab, onClose, useSearch, setUseSearch, talkBa
               </li>
             ))}
           </ul>
-          <p className="fine">Tip: in chat, say “remind me to call a friend tomorrow at 9am” and Aries saves it.</p>
+          <p className="fine">Tip: in chat, say “remind me to call Kelfy tomorrow at 9am” and Aries saves it.</p>
         </section>
 
         <section>
@@ -950,11 +950,10 @@ function MoreSheet({ data, tab, setTab, onClose, useSearch, setUseSearch, talkBa
             bottom-right, just above the taskbar.</p>
           <p><strong>Engine key:</strong> server-side only. The installer never contains
             an API key — users sign in to the SaaS backend instead. Aries is private
-            to Epsilon and a friend until it goes commercial.</p>
+            to Epsilon and Kelfy until it goes commercial.</p>
           <p><strong>Roadmap:</strong> web search ✓ · voice ✓ · tasks ✓ · installer ✓ ·
             face login ✓ · screenshot ✓ · PC control — last, not included here.</p>
           <a className="download-btn" href="https://github.com/Epsilon-Odinson/Aries/releases/download/v0.4.0-desktop/Aries.exe">Download for Windows (.exe)</a>
-          <p className="fine">You'll need to be signed into GitHub to download, since the repo is private.</p>
         </section>
         </>
       )}
