@@ -29,7 +29,12 @@ max 5 steps, confirmation before acting, twice for destructive
 actions, master toggle in Settings, OFF by default), an API-key
 field in Settings (saved via keyring), and the Windows .exe
 build (GitHub Actions, tag v*-desktop).
+0.4.1 fixes PC control so raw JSON never reaches the chat (the
+pc-actions block is parsed tolerantly, executed, and replaced by
+a plain-words result), and restyles the desktop to the current
+web front — deep purple, the exact visor SVG, the stacked
+greeting lockup, and the minimal main view.
 """
 
-__version__ = "0.4.0"
+__version__ = "0.4.1"
 __all__ = ["__version__"]

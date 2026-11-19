@@ -140,39 +140,173 @@ def _pyperclip():
 # --- parsing the model's action block ------------------------------------------
 
 
-def extract_pc_actions(reply: str) -> list[dict] | None:
-    """Pull a ````pc-actions`` JSON block out of a model reply.
+def _parse_action_list(text: str) -> list[dict] | None:
+    """Parse *text* as a JSON list of action steps; None when it is not.
 
-    Returns the list of steps, or None when the reply holds no such
-    block. Raises :class:`PcControlError` when the block is present
-    but is not valid JSON / not a list — the UI shows that as an
-    error instead of running anything.
+    A step counts only when it is an object whose "action" is one of
+    the known actions — so ordinary JSON (a list of strings, a config
+    blob) is never mistaken for a plan.
     """
-    match = re.search(
-        r"```pc-actions\s*\n(.*?)```", reply, re.DOTALL | re.IGNORECASE
-    )
-    if not match:
-        return None
     try:
-        steps = json.loads(match.group(1))
-    except json.JSONDecodeError as exc:
-        raise PcControlError(
-            f"I tried to plan PC actions but the plan was not valid JSON: {exc}"
-        ) from exc
-    if not isinstance(steps, list):
-        raise PcControlError(
-            "The PC action plan must be a JSON list of steps, not a single object."
-        )
+        steps = json.loads(text)
+    except (json.JSONDecodeError, ValueError):
+        return None
+    if not isinstance(steps, list) or not steps:
+        return None
+    if not all(
+        isinstance(step, dict) and str(step.get("action", "")) in ACTIONS
+        for step in steps
+    ):
+        return None
     return steps
 
 
+def _fence_blocks(reply: str):
+    """Yield (tag, body) for every fenced code block in *reply*.
+
+    Tolerates a missing closing fence (the block runs to the end of
+    the reply) and a tag with trailing text — the model does not
+    always write the fence cleanly.
+    """
+    pattern = re.compile(r"```([^\n`]*)\r?\n(.*?)(?:```|$)", re.DOTALL)
+    for match in pattern.finditer(reply):
+        tag_words = (match.group(1) or "").strip().split()
+        tag = tag_words[0].lower() if tag_words else ""
+        yield tag, match.group(2)
+
+
+def extract_pc_actions(reply: str) -> list[dict] | None:
+    """Pull a PC action plan out of a model reply, tolerantly.
+
+    Accepts a ````pc-actions`` fence (any case, trailing text on the
+    fence line, even an unclosed fence), a ````json`` or untagged
+    fence whose content is a list of action steps, or a bare JSON
+    list of steps with no fence at all. Returns the list of steps,
+    or None when the reply holds no such plan.
+
+    Raises :class:`PcControlError` — a clean one-line message, never
+    raw JSON — when a ````pc-actions`` block is present but is not
+    valid JSON / not a list. The UI shows that as an error instead
+    of running anything, and never shows the raw block.
+    """
+    for tag, body in _fence_blocks(reply):
+        if tag == "pc-actions":
+            try:
+                steps = json.loads(body)
+            except json.JSONDecodeError:
+                raise PcControlError(
+                    "I tried to plan PC actions but the plan was not "
+                    "valid JSON, so nothing ran. Ask me again and I will "
+                    "re-plan it."
+                ) from None
+            if not isinstance(steps, list):
+                raise PcControlError(
+                    "The PC action plan must be a JSON list of steps, "
+                    "not a single object — nothing ran."
+                )
+            if not steps:
+                raise PcControlError(
+                    "The PC action plan was empty — nothing ran."
+                )
+            return steps
+        if tag in ("json", ""):
+            steps = _parse_action_list(body)
+            if steps is not None:
+                return steps
+    # No fence held a plan — try a bare JSON list anywhere in the reply.
+    decoder = json.JSONDecoder()
+    index = 0
+    while True:
+        start = reply.find("[", index)
+        if start == -1:
+            break
+        try:
+            obj, _end = decoder.raw_decode(reply, start)
+        except (json.JSONDecodeError, ValueError):
+            index = start + 1
+            continue
+        if (
+            isinstance(obj, list)
+            and obj
+            and all(
+                isinstance(step, dict)
+                and str(step.get("action", "")) in ACTIONS
+                for step in obj
+            )
+        ):
+            return obj
+        index = start + 1
+    return None
+
+
+def _remove_bare_action_lists(text: str) -> str:
+    """Remove a bare JSON list of action steps (no fence) from *text*."""
+    decoder = json.JSONDecoder()
+    out: list[str] = []
+    index = 0
+    while True:
+        start = text.find("[", index)
+        if start == -1:
+            out.append(text[index:])
+            break
+        try:
+            obj, end = decoder.raw_decode(text, start)
+        except (json.JSONDecodeError, ValueError):
+            out.append(text[index:start + 1])
+            index = start + 1
+            continue
+        if (
+            isinstance(obj, list)
+            and obj
+            and all(
+                isinstance(step, dict)
+                and str(step.get("action", "")) in ACTIONS
+                for step in obj
+            )
+        ):
+            out.append(text[index:start])
+            index = end
+        else:
+            out.append(text[index:start + 1])
+            index = start + 1
+    return "".join(out)
+
+
 def strip_pc_actions_block(reply: str) -> str:
-    """Remove the ````pc-actions`` block so the chat shows plain words."""
+    """Remove every PC action block from a reply, so the chat shows
+    plain words only. Removes ````pc-actions`` fences (even unclosed
+    or malformed), ````json``/untagged fences that hold action steps,
+    and bare JSON lists of steps. Any other text is left untouched.
+    """
+    def _sub_fence(match: "re.Match[str]") -> str:
+        tag_words = (match.group(1) or "").strip().split()
+        tag = tag_words[0].lower() if tag_words else ""
+        body = match.group(2)
+        if tag == "pc-actions":
+            return ""
+        if tag in ("json", "") and _parse_action_list(body) is not None:
+            return ""
+        return match.group(0)
+
     text = re.sub(
-        r"```pc-actions\s*\n.*?```", "", reply,
-        flags=re.DOTALL | re.IGNORECASE,
+        r"```([^\n`]*)\r?\n(.*?)(?:```|$)",
+        _sub_fence,
+        reply,
+        flags=re.DOTALL,
+    )
+    text = _remove_bare_action_lists(text)
+    # Last resort: a stray pc-actions fence fragment must never show.
+    text = re.sub(
+        r"```pc-actions.*$", "", text, flags=re.DOTALL | re.IGNORECASE
     )
     return re.sub(r"\n{3,}", "\n\n", text).strip()
+
+
+def sanitize_display(reply: str) -> str:
+    """Text safe to show in chat: action blocks removed, never raw
+    JSON, never a fence, never a field name like "appname". This is
+    the one entry the UI uses before displaying any reply."""
+    return strip_pc_actions_block(reply)
 
 
 # --- describing and checking a plan ----------------------------------------------
@@ -497,11 +631,16 @@ You can also act on this PC — open apps and files, type, click,
 use the clipboard, run commands, read/write files, check system
 info. This is a desktop app on Windows, so PC actions are real.
 
-When the user asks you to DO something on the PC (not just answer),
-reply with a short sentence saying what you will do, then a fenced
-block with the plan as a JSON list — at most 5 steps. The app shows
-the plan to the user and asks before anything runs, so never claim
-an action already happened.
+When the user asks you to DO something on the PC (not just answer
+a question), reply with ONLY the fenced pc-actions block and
+nothing else — no greeting, no sentence before it, no explanation
+after it. The app shows the plan to the user, asks for permission,
+runs it, and reports the result in plain words. After the result
+comes back, say what happened in plain words, briefly.
+
+Never put the JSON, any field name (like "action", "appname" or
+"name"), or the block itself into your visible answer — the user
+must only ever see plain words and results, never raw JSON.
 
 ```pc-actions
 [{"action": "open_app", "name": "notepad"}]

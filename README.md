@@ -1,9 +1,10 @@
 # Aries
 
-Aries is a Python PC desktop AI companion. JARVIS-style HUD in deep
-purple, a real animated robot face, voice and face-recognition
-login, a permissions system for sensitive actions, and a mini mode —
-built one module at a time.
+Aries is a Python PC desktop AI companion. The web front's look
+on the desktop — deep purple, the exact visor face, the stacked
+greeting lockup, a minimal main view with only the composer —
+voice and face-recognition login, a permissions system for
+sensitive actions, and a mini mode — built one module at a time.
 
 **Greeting:** "Aries active. Ready to cook."
 
@@ -14,30 +15,33 @@ built one module at a time.
   `https://integrate.api.nvidia.com/v1/chat/completions`
 - CLI chat loop (`python -m aries.main --cli`)
 
-## What works so far (Module 2) — desktop UI (JARVIS redesign, 0.2.1)
+## What works so far (Module 2) — desktop UI (web-front look, 0.4.1)
 
-- PyQt5 main window, JARVIS-style HUD in deep purple
-  (`#0d0010` / `#7b2fff`, a touch of cyan `#35e0ff` on the core
-  only), greeting "Aries active. Ready to cook." on launch
-- HUD background instead of code rain: very dark purple-black,
-  faint grid, slow rotating glowing rings, drifting particles,
-  soft radial glow behind the face (~15 fps, no pause control —
-  the animation just runs; the Pause-background button was
-  removed in 0.3.2). The old green code rain is gone —
-  the user said the background sucked, and he was right.
-- A machine face instead of a smiley face or a radar-like core
-  (drawn with QPainter, no image files) — see 0.3.0 and 0.3.2
-  below: 0.3.0 was a robot head with eyes and a mouth; 0.3.2
-  replaced it with a single angular glowing visor, no smile,
-  no eyebrows, no human mouth, because the robot face looked
-  too humany. The face is big and central — 360 px in
-  fullscreen, the first thing you see.
-- HUD layout: face + real status readouts on the left (current
-  time, model name, key set / not set, status), chat as a clean
-  HUD panel with corner brackets on the right. No fake CPU / RAM
-  numbers — every readout is real. (0.3.2 cut this down: the
-  face is now centred and first, with one greeting line and
-  one tiny status line, and chat under it — see below.)
+- PyQt5 main window in the web front's deep purple
+  (`#0d0010` / `#7b2fff` / `#f6ecd9` cream), greeting lockup
+  "ARIES / active / Ready to cook." on launch
+- Veil background instead of code rain: deep purple with a
+  vignette and a soft purple glow behind the face (~16 fps,
+  no pause control — the animation just runs). The old green
+  code rain is gone — the user said the background sucked,
+  and he was right. (The web front's baked grain texture and
+  artwork image cannot ship in the desktop build — the
+  snapshot push cannot carry binary image files — so the
+  desktop uses flat deep purple instead.)
+- The exact visor face from the web front (drawn with
+  QPainter, no image files): an angular hexagonal shell, one
+  eye band, a chin light strip, faint circuitry and a scanning
+  light — no smile, no eyebrows, no human mouth, because the
+  robot face looked too humany. The face is big and central —
+  280 px in fullscreen, the first thing you see.
+- Minimal main view: the face, the greeting lockup, one tiny
+  status line, then chat as cream text straight on the veil
+  (no panel, no bubble), and the composer pill at the bottom
+  (text input, mic, Send) with a small round gear for
+  Settings. No fake CPU / RAM numbers — every readout is real.
+  (0.3.2 cut the old HUD down: the face is now centred and
+  first, with one greeting line and one tiny status line, and
+  chat under it — 0.4.1 finished the job to match the web front.)
 - Chat pane wired to the NVIDIA LLM, with conversation history.
   LLM calls run in a worker thread, so the UI never freezes;
   401 / 429 / 410 errors show in-chat in plain words, not as a crash
@@ -171,6 +175,39 @@ built one module at a time.
   font, no monospace for main text anywhere — title, greeting,
   chat, input, buttons and status all use Segoe UI, falling
   back to Arial / sans-serif if Segoe UI is missing.
+
+## What changed in 0.4.1 — PC control never shows raw JSON, web-front look
+
+- **PC control replies are sanitised** (`aries/pc_control.py`,
+  `aries/main.py`, `aries/ui.py`): the `pc-actions` JSON block
+  is now found anywhere in the reply (case/whitespace tolerant),
+  parsed, executed, and **replaced in the chat by a plain-words
+  result** ("Opened File Explorer", "Done") — the user never
+  sees raw JSON, a JSON fence, or field names like `appname`.
+  A malformed block or an unknown action gives a clean one-line
+  error, never the raw text. The system prompt now tells the
+  model to output ONLY the `pc-actions` block (no extra prose)
+  when doing a PC action. The first PC action still asks for
+  permission; later ones run and show the result.
+- **Web-front look** (`aries/ui.py`): the desktop now matches
+  the current web front — deep purple (`#0d0010` background,
+  `#7b2fff` purple, `#f6ecd9` cream), the **exact visor SVG**
+  from the web front (angular hexagonal shell, one eye band,
+  chin light strip, faint circuitry, scanning light — no human
+  features), the stacked greeting lockup (**ARIES / active /
+  Ready to cook.**), one tiny status line with a purple dot, and
+  a minimal main view: only the composer (text input, mic,
+  Send) and a small round gear for Settings. The face still
+  breathes, blinks, looks around, follows the cursor, and its
+  eye band pulses and scans like the web front. The mic button
+  says plainly that voice input is not in the desktop build yet
+  (it works on the website). What PyQt5 cannot do: the web
+  front's baked grain texture and its exact artwork image (the
+  snapshot push cannot ship binary image files), and the web
+  front's smooth WebGL veil — the desktop uses a flat deep
+  purple with a vignette and a soft purple glow behind the face
+  instead. Everything else — chat, mini mode, Settings,
+  fullscreen — works as before.
 
 ## What changed in 0.4.0 — PC control, API-key Settings, Windows .exe
 
