@@ -953,6 +953,8 @@ function MoreSheet({ data, tab, setTab, onClose, useSearch, setUseSearch, talkBa
             to Epsilon and a friend until it goes commercial.</p>
           <p><strong>Roadmap:</strong> web search ✓ · voice ✓ · tasks ✓ · installer ✓ ·
             face login ✓ · screenshot ✓ · PC control — last, not included here.</p>
+          <a className="download-btn" href="https://github.com/Epsilon-Odinson/Aries/releases/download/v0.4.0-desktop/Aries.exe">Download for Windows (.exe)</a>
+          <p className="fine">You'll need to be signed into GitHub to download, since the repo is private.</p>
         </section>
         </>
       )}
