@@ -330,6 +330,7 @@ export default function App() {
     <div className="aries-app">
       <div className="aries-veil">
         <DitherVeil
+          debug
           pattern="bayer"
           pixelSize={grain === "fine" ? 2 : 4}
           inkColor="#060607"

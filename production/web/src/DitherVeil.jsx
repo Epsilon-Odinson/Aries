@@ -386,10 +386,12 @@ const DitherVeil = ({
   reverse = false,
   wander = false,
   clickBurst = true,
+  debug = false,
   className = '',
   style
 }) => {
   const containerRef = useRef(null);
+  const canvasRef = useRef(null);
   const settingsRef = useRef(null);
   const wakeRef = useRef(() => {});
 
@@ -418,16 +420,18 @@ const DitherVeil = ({
 
   useEffect(() => {
     const container = containerRef.current;
-    if (!container) return undefined;
+    if (!container || !canvasRef.current) return undefined;
 
     const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
-    const renderer = new Renderer({ dpr: Math.min(window.devicePixelRatio || 1, 2), alpha: false, antialias: false });
+    // The canvas is rendered by React (see the return below), so React owns
+    // it and removes it on unmount. The component never appends a canvas
+    // imperatively, so no stale canvas can be left behind.
+    const renderer = new Renderer({ canvas: canvasRef.current, dpr: Math.min(window.devicePixelRatio || 1, 2), alpha: false, antialias: false });
     const gl = renderer.gl;
     const canvas = gl.canvas;
     canvas.style.display = 'block';
     canvas.style.width = '100%';
     canvas.style.height = '100%';
-    container.appendChild(canvas);
 
     const floatMask = renderer.isWebgl2 && !!renderer.getExtension('EXT_color_buffer_float');
     const geometry = new Triangle(gl);
@@ -512,6 +516,7 @@ const DitherVeil = ({
     let introStart = 0;
     let diffusedKey = '';
     let diffusionBlocked = false;
+    let lastPatternIndex = -1;
     let width = 1;
     let height = 1;
     let visible = true;
@@ -707,6 +712,7 @@ const DitherVeil = ({
         noiseTexture.height = 64;
         noiseTexture.needsUpdate = true;
       }
+      lastPatternIndex = patternIndex;
 
       const texelsPerPixel = image ? (viewUniforms.uCover.value[0] * image.naturalWidth) / canvas.width : 1;
       viewUniforms.tMask.value = masks[0].texture;
@@ -800,8 +806,27 @@ const DitherVeil = ({
     layout();
     wake();
 
+    // TEMP DIAGNOSTIC (debug prop only): report the veil's live shader inputs
+    // to the tab title every 2s so a browser check can read them. Remove with
+    // the debug prop once the white-rectangle root cause is found.
+    let diagTimer = 0;
+    if (debug) {
+      const reportDiag = () => {
+        const s = settingsRef.current || {};
+        const cover = viewUniforms.uCover.value;
+        const matte = viewUniforms.uMatte.value;
+        const res = viewUniforms.uResolution.value;
+        const state = `VEIL pat=${s.pattern} idx=${lastPatternIndex} diffBlocked=${diffusionBlocked} img=${image ? `${image.naturalWidth}x${image.naturalHeight}` : 'null'} canvas=${canvas.width}x${canvas.height} cont=${container.clientWidth}x${container.clientHeight} cover=[${Number(cover[0]).toFixed(3)},${Number(cover[1]).toFixed(3)}] key=${viewUniforms.uKey.value} matte=[${Number(matte[0]).toFixed(2)},${Number(matte[1]).toFixed(2)},${Number(matte[2]).toFixed(2)}] cell=${viewUniforms.uCell.value} res=[${res[0]},${res[1]}] intro=${Number(viewUniforms.uIntro.value).toFixed(2)} fit=${s.fit} px=${s.pixelSize}`;
+        document.title = state;
+        window.__veilDiag = state;
+      };
+      reportDiag();
+      diagTimer = window.setInterval(reportDiag, 2000);
+    }
+
     return () => {
       cancelAnimationFrame(raf);
+      if (diagTimer) window.clearInterval(diagTimer);
       wakeRef.current = () => {};
       resizeObserver.disconnect();
       intersectionObserver.disconnect();
@@ -812,11 +837,15 @@ const DitherVeil = ({
       container.removeEventListener('pointerleave', onLeave);
       container.removeEventListener('pointercancel', onLeave);
       gl.getExtension('WEBGL_lose_context')?.loseContext();
-      if (canvas.parentNode) canvas.parentNode.removeChild(canvas);
+      // The canvas is React-owned (rendered below), so React removes it.
     };
   }, [src]);
 
-  return <div ref={containerRef} className={`dither-veil ${className}`.trim()} style={style} />;
+  return (
+    <div ref={containerRef} className={`dither-veil ${className}`.trim()} style={style}>
+      <canvas ref={canvasRef} style={{ display: 'block', width: '100%', height: '100%' }} />
+    </div>
+  );
 };
 
 export default DitherVeil;
