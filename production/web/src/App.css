@@ -59,6 +59,7 @@ body {
    the controls themselves, which stay clickable. */
 .aries-hero { pointer-events: none; }
 .aries-hero .aries-face,
+.aries-hero .face-disc,
 .aries-hero .due-card,
 .aries-hero .composer-row,
 .aries-hero .hero-tools,
@@ -66,6 +67,7 @@ body {
 .aries-hero .latest-reply a { pointer-events: auto; }
 .mini-panel { pointer-events: none; }
 .mini-panel .aries-face,
+.mini-panel .face-disc,
 .mini-panel .due-card,
 .mini-panel .composer-row,
 .mini-panel .mini-tools { pointer-events: auto; }
@@ -133,13 +135,22 @@ body {
   font-size: 1rem; margin-top: 0.4rem;
   background: linear-gradient(90deg, #BE9019, #DCA532, #F5C360, #FDE7A9, #DEAB4A);
   -webkit-background-clip: text; background-clip: text; color: transparent;
-  filter: drop-shadow(0 0 10px rgba(242, 181, 68, 0.35));
+  filter: drop-shadow(0 0 10px rgba(242, 181, 68, 0.35)) drop-shadow(0 2px 12px rgba(0, 0, 0, 0.8));
 }
 .status-line {
   margin: 0.75rem 0 0; font-size: 0.75rem; letter-spacing: 0.3em; text-transform: uppercase;
   color: #ADA798; display: flex; align-items: center; gap: 0.5rem; justify-content: center;
 }
 .status-dot { width: 8px; height: 8px; border-radius: 50%; background: #F2B544; display: inline-block; }
+/* The face sits on its own DitherVeil disc: a circular medallion of the
+   nebula, dithered, with a faint gold hairline. The veil fills the disc
+   behind the face; the face button sits above it. */
+.face-disc {
+  position: relative; display: flex; align-items: center; justify-content: center;
+  border-radius: 50%; overflow: hidden; border: 1px solid rgba(242, 181, 68, 0.35);
+}
+.face-disc .dither-veil { position: absolute; inset: 0; }
+.face-disc .aries-face { position: relative; z-index: 1; }
 .aries-face { background: transparent; border: none; cursor: pointer; padding: 0; }
 .aries-face svg { display: block; }
 .aries-face .face-antenna { animation: face-bob 3s ease-in-out infinite; }

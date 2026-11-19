@@ -96,6 +96,31 @@ function useTypewriter(text) {
   return { shown, done, finish };
 }
 
+// The face sits on its own DitherVeil disc — a dithered gold-rimmed
+// medallion behind the visor. The disc reveals the nebula in full
+// colour under the cursor and bursts on tap; the face and all its
+// state animations stay as they are.
+function FaceDisc({ state, size, grain, onClick, label }) {
+  const disc = size + 100;
+  return (
+    <div className="face-disc" style={{ width: disc, height: disc }}>
+      <DitherVeil
+        pattern="floyd"
+        pixelSize={grain === "fine" ? 2 : 4}
+        inkColor="#060607"
+        paperColor="#ece6d8"
+        revealRadius={120}
+        softness={0.6}
+        linger={1}
+        rim={0.15}
+        rimColor="#F2B544"
+        fit="cover"
+      />
+      <Face state={state} size={size} onClick={onClick} label={label} />
+    </div>
+  );
+}
+
 export default function App() {
   const [data, setData] = useState(null);
   const [error, setError] = useState("");
@@ -328,10 +353,11 @@ export default function App() {
       </button>
 
       {locked ? (
-        <LockScreen data={data} onUnlock={() => setLocked(false)} />
+        <LockScreen data={data} onUnlock={() => setLocked(false)} grain={grain} />
       ) : mini ? (
         <MiniPanel
           faceState={faceState}
+          grain={grain}
           status={status}
           input={input}
           setInput={setInput}
@@ -352,7 +378,7 @@ export default function App() {
       ) : (
         <main className="aries-hero">
           <div className="aries-lockup">
-            <Face state={faceState} size={320} onClick={() => setMini(true)} />
+            <FaceDisc state={faceState} size={320} grain={grain} onClick={() => setMini(true)} />
             <h1>
               <span className="word-aries">ARIES</span>
               <span className="word-active">active</span>
@@ -477,7 +503,7 @@ function Sources({ sources }) {
 function MiniPanel(props) {
   return (
     <div className="mini-panel">
-      <Face state={props.faceState} size={150} onClick={props.onExpand} label="Aries mini — tap to expand" />
+      <FaceDisc state={props.faceState} size={150} grain={props.grain} onClick={props.onExpand} label="Aries mini — tap to expand" />
       <p className="mini-status">ARIES — {props.status}</p>
       {props.lastReply && <p className="mini-reply" onClick={props.typed.finish} title="Tap to show the full reply">{props.typed.shown}{!props.typed.done && <span className="type-caret">▍</span>}</p>}
       {props.due.length > 0 && (
@@ -511,7 +537,7 @@ function MiniPanel(props) {
   );
 }
 
-function LockScreen({ data, onUnlock }) {
+function LockScreen({ data, onUnlock, grain }) {
   const [file, setFile] = useState(null);
   const [pin, setPin] = useState("");
   const [msg, setMsg] = useState("Aries is locked. Show your face, or enter your PIN.");
@@ -533,7 +559,7 @@ function LockScreen({ data, onUnlock }) {
   }
   return (
     <div className="lock-screen">
-      <Face state="idle" size={200} />
+      <FaceDisc state="idle" size={200} grain={grain} />
       <h1>ARIES</h1>
       <p>{msg}</p>
       <input type="file" accept="image/*" onChange={(e) => setFile(e.target.files[0])} />
