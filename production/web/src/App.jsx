@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import DitherVeil from "./DitherVeil.jsx";
+import Veil from "./Veil.jsx";
 import Face from "./Face.jsx";
 import { api } from "./api.js";
 
@@ -96,31 +96,6 @@ function useTypewriter(text) {
   return { shown, done, finish };
 }
 
-// The face sits on its own DitherVeil disc — a dithered gold-rimmed
-// medallion behind the visor. The disc reveals the nebula in full
-// colour under the cursor and bursts on tap; the face and all its
-// state animations stay as they are.
-function FaceDisc({ state, size, grain, onClick, label }) {
-  const disc = size + 100;
-  return (
-    <div className="face-disc" style={{ width: disc, height: disc }}>
-      <DitherVeil
-        pattern="floyd"
-        pixelSize={grain === "fine" ? 2 : 4}
-        inkColor="#060607"
-        paperColor="#ece6d8"
-        revealRadius={120}
-        softness={0.6}
-        linger={1}
-        rim={0.15}
-        rimColor="#F2B544"
-        fit="cover"
-      />
-      <Face state={state} size={size} onClick={onClick} label={label} />
-    </div>
-  );
-}
-
 export default function App() {
   const [data, setData] = useState(null);
   const [error, setError] = useState("");
@@ -142,25 +117,20 @@ export default function App() {
   const [locked, setLocked] = useState(false);
   const [setupOpen, setSetupOpen] = useState(false);
   const [notice, setNotice] = useState("");
-  // Grain toggle drives DitherVeil's dither cell size: fine = 2px, coarse = 4px.
+  // Grain toggle swaps which baked grain image the veil shows.
   const [grain, setGrain] = useState("fine");
+  // Burst button: each increment fires one burst from the veil's centre.
+  const [burstSignal, setBurstSignal] = useState(0);
   const wakeRef = useRef(null);
   const inputRef = useRef(null);
-  // TEMP DIAGNOSTIC v4 — remove once the white-rectangle root cause is found.
-  // After 4s, hide the face disc(s) so the hero text shifts up; a browser
-  // check can then see whether the cream rectangle moves up with the text
-  // (tied to the disc/text) or stays fixed (tied to the background/canvas).
-  useEffect(() => {
-    if (!data) return undefined;
-    const t = setTimeout(() => {
-      document.querySelectorAll(".face-disc").forEach((el) => {
-        el.style.display = "none";
-      });
-      document.title = `${document.title} | DISC-HIDDEN`;
-    }, 4000);
-    return () => clearTimeout(t);
-  }, [data]);
 
+  // Mini mode is the web front's body class: the visor shrinks, the
+  // greeting and status fade out, and the stage moves to the bottom.
+  // Pressing the face toggles it; Expand returns to full size.
+  useEffect(() => {
+    document.body.classList.toggle("mini", mini);
+    return () => document.body.classList.remove("mini");
+  }, [mini]);
 
   const load = useCallback(async () => {
     try {
@@ -340,67 +310,36 @@ export default function App() {
   }
   if (!data) return <div className="aries-loading">ARIES — waking up…</div>;
 
+  const hint = mini
+    ? "Mini mode. Press the face again to bring Aries back to full size."
+    : "Move across the veil to lift it — the full colour is underneath. Tap for a burst. Press the face for mini mode.";
+
   return (
     <div className="aries-app">
-      <div className="aries-veil">
-        <DitherVeil
-          debug
-          pattern="bayer"
-          pixelSize={grain === "fine" ? 2 : 4}
-          inkColor="#060607"
-          paperColor="#ece6d8"
-          revealRadius={200}
-          softness={0.6}
-          linger={1}
-          rim={0.15}
-          rimColor="#F2B544"
-          fit="cover"
-        />
+      <Veil grain={grain} burstSignal={burstSignal} />
+
+      <div className="topline">
+        <span className="state-label">ARIES</span>
       </div>
-      <button
-        className="veil-toggle"
-        onClick={(e) => {
-          e.stopPropagation();
-          setGrain(grain === "fine" ? "coarse" : "fine");
-        }}
-      >
-        {grain === "fine" ? "Coarse grain" : "Fine grain"}
-      </button>
 
       {locked ? (
-        <LockScreen data={data} onUnlock={() => setLocked(false)} grain={grain} />
-      ) : mini ? (
-        <MiniPanel
-          faceState={faceState}
-          grain={grain}
-          status={status}
-          input={input}
-          setInput={setInput}
-          onSend={() => send()}
-          onMic={startDictation}
-          listening={listening}
-          talkBack={talkBack}
-          setTalkBack={setTalkBack}
-          wakeOn={wakeOn}
-          setWakeOn={setWakeOn}
-          onExpand={() => setMini(false)}
-          onMore={() => { setMini(false); setShowMore(true); }}
-          due={due}
-          onDismissDue={dismissDue}
-          lastReply={lastAries}
-          typed={typed}
-        />
+        <LockScreen data={data} onUnlock={() => setLocked(false)} />
       ) : (
-        <main className="aries-hero">
-          <div className="aries-lockup">
-            <FaceDisc state={faceState} size={320} grain={grain} onClick={() => setMini(true)} />
+        <main className="stage">
+          <Face
+            state={faceState}
+            onClick={() => setMini((v) => !v)}
+            label={mini ? "Aries face, mini mode. Press to return to full size." : "Aries face. Press to toggle mini mode."}
+          />
+          <div className="greeting">
             <h1>
               <span className="word-aries">ARIES</span>
               <span className="word-active">active</span>
               <span className="cook">Ready to cook.</span>
             </h1>
-            <p className="status-line">
-              <span className="status-dot" /> {status}
+            <p className="status">
+              <span className="dot" aria-hidden="true" />
+              <span>{status}</span>
             </p>
           </div>
 
@@ -413,7 +352,13 @@ export default function App() {
           )}
 
           <LatestReply message={lastAries} typed={typed} />
+        </main>
+      )}
 
+      {!locked && (
+        <div className="dock">
+          <p className="hint">{hint}</p>
+          {notice && <p className="notice" onClick={() => setNotice("")}>{notice} ✕</p>}
           <div className="composer-row">
             <button
               className={`globe ${useSearch ? "on" : ""}`}
@@ -434,21 +379,57 @@ export default function App() {
             </button>
             <button className="send" onClick={() => send()}>Send</button>
           </div>
-          <div className="hero-tools">
-            <button onClick={() => { setMoreTab("personality"); setShowMore(true); }}>
+          <div className="controls">
+            <button className="pill" type="button" onClick={() => setBurstSignal((n) => n + 1)}>
+              Release a burst
+            </button>
+            <div className="grain-group" role="group" aria-label="Veil grain">
+              <button className="pill" type="button" aria-pressed={grain === "fine"} onClick={() => setGrain("fine")}>
+                Fine grain
+              </button>
+              <button className="pill" type="button" aria-pressed={grain === "coarse"} onClick={() => setGrain("coarse")}>
+                Coarse grain
+              </button>
+            </div>
+            <button
+              className="pill"
+              type="button"
+              aria-pressed={useSearch}
+              onClick={() => setUseSearch((v) => !v)}
+              title="Search the web for the next message"
+            >
+              Search the web
+            </button>
+            <button
+              className="pill"
+              type="button"
+              aria-pressed={talkBack}
+              onClick={() => setTalkBack((v) => !v)}
+            >
+              Talk back
+            </button>
+            <button
+              className="pill"
+              type="button"
+              aria-pressed={wakeOn}
+              onClick={() => setWakeOn((v) => !v)}
+            >
+              Wake phrase (“Hey Aries”)
+            </button>
+            <button
+              className="pill"
+              type="button"
+              onClick={() => { setMoreTab("personality"); setShowMore(true); }}
+            >
               Settings / More
             </button>
-            <label className="toggle">
-              <input type="checkbox" checked={talkBack} onChange={(e) => setTalkBack(e.target.checked)} />
-              Talk back
-            </label>
-            <label className="toggle">
-              <input type="checkbox" checked={wakeOn} onChange={(e) => setWakeOn(e.target.checked)} />
-              Wake phrase (“Hey Aries”)
-            </label>
+            {mini && (
+              <button className="pill" type="button" onClick={() => setMini(false)}>
+                Expand
+              </button>
+            )}
           </div>
-          {notice && <p className="notice" onClick={() => setNotice("")}>{notice} ✕</p>}
-        </main>
+        </div>
       )}
 
       {permPrompt && (
@@ -515,44 +496,7 @@ function Sources({ sources }) {
   );
 }
 
-function MiniPanel(props) {
-  return (
-    <div className="mini-panel">
-      <FaceDisc state={props.faceState} size={150} grain={props.grain} onClick={props.onExpand} label="Aries mini — tap to expand" />
-      <p className="mini-status">ARIES — {props.status}</p>
-      {props.lastReply && <p className="mini-reply" onClick={props.typed.finish} title="Tap to show the full reply">{props.typed.shown}{!props.typed.done && <span className="type-caret">▍</span>}</p>}
-      {props.due.length > 0 && (
-        <div className="due-card mini">
-          <strong>Reminder:</strong> {props.due[0].title}
-          <button onClick={() => props.onDismissDue(props.due[0])}>Done</button>
-        </div>
-      )}
-      <div className="composer-row mini">
-        <input
-          value={props.input}
-          onChange={(e) => props.setInput(e.target.value)}
-          onKeyDown={(e) => { if (e.key === "Enter") props.onSend(); }}
-          placeholder="Message…"
-          aria-label="Message Aries"
-        />
-        <button className="mic" onClick={props.onMic} title="Dictate">{props.listening ? "●" : "🎙"}</button>
-        <button className="send" onClick={props.onSend}>Send</button>
-      </div>
-      <div className="mini-tools">
-        <label className="toggle">
-          <input type="checkbox" checked={props.talkBack} onChange={(e) => props.setTalkBack(e.target.checked)} /> Talk back
-        </label>
-        <label className="toggle">
-          <input type="checkbox" checked={props.wakeOn} onChange={(e) => props.setWakeOn(e.target.checked)} /> Wake phrase
-        </label>
-        <button onClick={props.onMore}>More</button>
-        <button onClick={props.onExpand}>Expand</button>
-      </div>
-    </div>
-  );
-}
-
-function LockScreen({ data, onUnlock, grain }) {
+function LockScreen({ data, onUnlock }) {
   const [file, setFile] = useState(null);
   const [pin, setPin] = useState("");
   const [msg, setMsg] = useState("Aries is locked. Show your face, or enter your PIN.");
@@ -574,7 +518,7 @@ function LockScreen({ data, onUnlock, grain }) {
   }
   return (
     <div className="lock-screen">
-      <FaceDisc state="idle" size={200} grain={grain} />
+      <Face state="idle" />
       <h1>ARIES</h1>
       <p>{msg}</p>
       <input type="file" accept="image/*" onChange={(e) => setFile(e.target.files[0])} />
@@ -879,4 +823,3 @@ function SetupWizard({ onDone, onSkip }) {
     </div>
   );
 }
-

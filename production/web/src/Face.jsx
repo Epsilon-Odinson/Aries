@@ -1,68 +1,80 @@
-// Aries visor face — a machine, not a human.
-// Angular hexagonal visor, expression by light and motion only:
-// no smile, no eyebrows, no human mouth. States: idle, listening,
-// thinking, speaking, searching, error.
-export default function Face({ state = "idle", size = 320, onClick, label }) {
-  const glow =
-    state === "listening"
-      ? "#35e0ff"
-      : state === "error"
-        ? "#ff5d5d"
-        : "#F2B544";
-  const cls = `aries-face state-${state}`;
+// Aries visor face — the exact machine visor from the web front:
+// angular hexagonal shell, expression by light only. No human features.
+// The eye band's light shifts with state (listening cyan, error red);
+// otherwise it is the web front's purple, exactly.
+import { useId } from "react";
+
+const EYE_COLORS = {
+  listening: { a: "#35e0ff", b: "#d8f6ff", chin: "rgba(53,224,255,0.75)" },
+  error: { a: "#ff5d5d", b: "#ffd4d4", chin: "rgba(255,93,93,0.75)" },
+};
+
+export default function Face({ state = "idle", onClick, label }) {
+  const uid = useId().replace(/[^a-zA-Z0-9]/g, "");
+  const shellId = `shell-${uid}`;
+  const eyeId = `eye-${uid}`;
+  const clipId = `visorClip-${uid}`;
+  const eye = EYE_COLORS[state] || { a: "#8f4dff", b: "#e6d4ff", chin: "rgba(183,139,255,0.75)" };
+
   return (
     <button
       type="button"
-      className={cls}
-      style={{ width: size, height: size }}
+      className="face-btn"
       onClick={onClick}
-      aria-label={label || `Aries face — ${state}. Tap for mini mode.`}
-      title="Tap for mini mode"
+      aria-label={label || `Aries face — ${state}. Press to toggle mini mode.`}
+      title="Press to toggle mini mode"
     >
-      <svg viewBox="0 0 200 200" width={size} height={size} aria-hidden="true">
-        {/* antenna */}
-        <line x1="100" y1="18" x2="100" y2="38" stroke="#F2B544" strokeWidth="4" strokeLinecap="round" />
-        <circle cx="100" cy="14" r="6" fill={glow} className="face-antenna" />
-        {/* head: angular machine shell */}
-        <path
-          d="M40 55 L160 55 L178 80 L178 140 L160 168 L40 168 L22 140 L22 80 Z"
-          fill="#111114"
-          stroke="#605B56"
+      <svg className="visor" viewBox="0 0 200 168" role="img" aria-hidden="true" focusable="false">
+        <defs>
+          <linearGradient id={shellId} x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0" stopColor="#2a0a44" />
+            <stop offset="0.55" stopColor="#170327" />
+            <stop offset="1" stopColor="#0d0010" />
+          </linearGradient>
+          <linearGradient id={eyeId} x1="0" y1="0" x2="1" y2="0">
+            <stop offset="0" stopColor={eye.a} />
+            <stop offset="0.5" stopColor={eye.b} />
+            <stop offset="1" stopColor={eye.a} />
+          </linearGradient>
+          <clipPath id={clipId}>
+            <polygon points="100,14 168,46 182,100 146,152 54,152 18,100 32,46" />
+          </clipPath>
+        </defs>
+        {/* shell */}
+        <polygon
+          points="100,6 176,42 192,100 150,160 50,160 8,100 24,42"
+          fill={`url(#${shellId})`}
+          stroke="#7b2fff"
           strokeWidth="2.5"
+          strokeLinejoin="round"
         />
-        {/* vent slots */}
-        <line x1="70" y1="48" x2="90" y2="48" stroke="#3C3B39" strokeWidth="4" strokeLinecap="round" />
-        <line x1="110" y1="48" x2="130" y2="48" stroke="#3C3B39" strokeWidth="4" strokeLinecap="round" />
-        {/* side plates */}
-        <rect x="14" y="96" width="10" height="34" rx="3" fill="#3C3B39" />
-        <rect x="176" y="96" width="10" height="34" rx="3" fill="#3C3B39" />
-        {/* hexagonal visor */}
-        <path
-          d="M52 92 L148 92 L162 112 L148 132 L52 132 L38 112 Z"
-          fill="#060607"
-          stroke={glow}
-          strokeWidth="2"
-          className="face-visor"
+        {/* inner visor plate */}
+        <polygon
+          points="100,14 168,46 182,100 146,152 54,152 18,100 32,46"
+          fill="#12021f"
+          stroke="rgba(183,139,255,0.35)"
+          strokeWidth="1"
+          strokeLinejoin="round"
         />
-        {/* two slanted eye-slits whose cores shift with the state */}
-        <path d="M62 112 L88 104 L88 120 L62 120 Z" fill={glow} className="face-eye" />
-        <path d="M112 104 L138 112 L138 120 L112 120 Z" fill={glow} className="face-eye" />
-        {/* waveform bars while speaking */}
-        {state === "speaking" && (
-          <g fill={glow} className="face-wave">
-            <rect x="82" y="146" width="5" height="12" rx="2" />
-            <rect x="92" y="142" width="5" height="18" rx="2" />
-            <rect x="102" y="146" width="5" height="12" rx="2" />
-            <rect x="112" y="144" width="5" height="15" rx="2" />
-          </g>
-        )}
-        {/* thinking ring */}
-        {state === "thinking" && (
-          <circle cx="100" cy="112" r="52" fill="none" stroke={glow} strokeWidth="1.5"
-            strokeDasharray="10 14" className="face-ring" />
-        )}
-        {/* status LED */}
-        <circle cx="100" cy="182" r="4" fill={glow} className="face-led" />
+        <g clipPath={`url(#${clipId})`}>
+          {/* faint inner circuitry */}
+          <path
+            d="M30 128 H78 L92 142 M170 128 H122 L108 142 M100 20 V44"
+            stroke="rgba(123,47,255,0.4)"
+            strokeWidth="2"
+            fill="none"
+          />
+          {/* scanning light */}
+          <rect className="scan" x="18" y="60" width="10" height="76" fill="rgba(183,139,255,0.16)" />
+        </g>
+        {/* the eye band: one angular light slit, no human features */}
+        <g className="eye-glow">
+          <polygon points="42,88 88,80 96,92 88,104 42,102 34,95" fill={`url(#${eyeId})`} />
+          <polygon points="158,88 112,80 104,92 112,104 158,102 166,95" fill={`url(#${eyeId})`} />
+          <rect x="95" y="90" width="10" height="5" fill="#e6d4ff" />
+        </g>
+        {/* chin light strip */}
+        <rect x="78" y="136" width="44" height="4" rx="2" fill={eye.chin} />
       </svg>
     </button>
   );

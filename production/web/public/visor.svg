@@ -1,0 +1,37 @@
+<svg class="visor" viewBox="0 0 200 168" role="img" aria-hidden="true" focusable="false">
+          <defs>
+            <linearGradient id="shell" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0" stop-color="#2a0a44" />
+              <stop offset="0.55" stop-color="#170327" />
+              <stop offset="1" stop-color="#0d0010" />
+            </linearGradient>
+            <linearGradient id="eye" x1="0" y1="0" x2="1" y2="0">
+              <stop offset="0" stop-color="#8f4dff" />
+              <stop offset="0.5" stop-color="#e6d4ff" />
+              <stop offset="1" stop-color="#8f4dff" />
+            </linearGradient>
+            <clipPath id="visorClip">
+              <polygon points="100,14 168,46 182,100 146,152 54,152 18,100 32,46" />
+            </clipPath>
+          </defs>
+          <!-- shell -->
+          <polygon points="100,6 176,42 192,100 150,160 50,160 8,100 24,42"
+                   fill="url(#shell)" stroke="#7b2fff" stroke-width="2.5" stroke-linejoin="round" />
+          <!-- inner visor plate -->
+          <polygon points="100,14 168,46 182,100 146,152 54,152 18,100 32,46"
+                   fill="#12021f" stroke="rgba(183,139,255,0.35)" stroke-width="1" stroke-linejoin="round" />
+          <g clip-path="url(#visorClip)">
+            <!-- faint inner circuitry -->
+            <path d="M30 128 H78 L92 142 M170 128 H122 L108 142 M100 20 V44" stroke="rgba(123,47,255,0.4)" stroke-width="2" fill="none" />
+            <!-- scanning light -->
+            <rect class="scan" x="18" y="60" width="10" height="76" fill="rgba(183,139,255,0.16)" />
+          </g>
+          <!-- the eye band: one angular light slit, no human features -->
+          <g class="eye-glow">
+            <polygon points="42,88 88,80 96,92 88,104 42,102 34,95" fill="url(#eye)" />
+            <polygon points="158,88 112,80 104,92 112,104 158,102 166,95" fill="url(#eye)" />
+            <rect x="95" y="90" width="10" height="5" fill="#e6d4ff" />
+          </g>
+          <!-- chin light strip -->
+          <rect x="78" y="136" width="44" height="4" rx="2" fill="rgba(183,139,255,0.75)" />
+        </svg>
