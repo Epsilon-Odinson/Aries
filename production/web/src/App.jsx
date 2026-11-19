@@ -146,6 +146,31 @@ export default function App() {
   const [grain, setGrain] = useState("fine");
   const wakeRef = useRef(null);
   const inputRef = useRef(null);
+  // TEMP DIAGNOSTIC — remove once the white-rectangle bug is found.
+  const [diag, setDiag] = useState("");
+  useEffect(() => {
+    if (!data) return undefined;
+    const t = setTimeout(() => {
+      const fmt = (r) => `${Math.round(r.width)}x${Math.round(r.height)} @${Math.round(r.x)},${Math.round(r.y)}`;
+      const canvases = [...document.querySelectorAll("canvas")].map(
+        (c) => `canvas ${fmt(c.getBoundingClientRect())} parent=${String(c.parentElement?.className || "")}`
+      );
+      const veils = [...document.querySelectorAll(".dither-veil")].map(
+        (v) => `veil ${fmt(v.getBoundingClientRect())} parent=${String(v.parentElement?.className || "")}`
+      );
+      const el = document.elementFromPoint(964, 725);
+      let chain = [];
+      let e = el;
+      while (e && chain.length < 6) {
+        chain.push(`${e.tagName}.${String(e.className || "")}`);
+        e = e.parentElement;
+      }
+      const s = `canvases=${canvases.length} [${canvases.join(" | ")}] veils=${veils.length} [${veils.join(" | ")}] at(964,725)=${chain.join(" > ")}`;
+      setDiag(s);
+      document.title = `DIAG ${s}`;
+    }, 3000);
+    return () => clearTimeout(t);
+  }, [data]);
 
 
   const load = useCallback(async () => {
@@ -328,6 +353,11 @@ export default function App() {
 
   return (
     <div className="aries-app">
+      {diag && (
+        <div style={{ position: "fixed", left: 8, bottom: 8, zIndex: 9999, maxWidth: "96vw", background: "#000", color: "#fff", fontSize: 10, padding: 6, wordBreak: "break-all" }}>
+          {diag}
+        </div>
+      )}
       <div className="aries-veil">
         <DitherVeil
           pattern="floyd"
