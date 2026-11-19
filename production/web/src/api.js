@@ -27,6 +27,24 @@ async function call(path, opts = {}) {
 export const api = {
   health: () => call("/api/health"),
   state: () => call("/api/state"),
+  // ElevenLabs voices on the server. 503 when the voice key is not set.
+  voices: () => call("/api/voices"),
+  // Talk-back audio as an MP3 blob. Throws on 503 (not configured) or
+  // any ElevenLabs error — the caller falls back to browser voices.
+  tts: async (text, voiceId) => {
+    const res = await fetch(`${BASE}/api/tts`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text, voice_id: voiceId || undefined }),
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      const err = new Error(data.detail || `Voice failed (${res.status})`);
+      err.status = res.status;
+      throw err;
+    }
+    return res.blob();
+  },
   chat: (message, useSearch, consent) =>
     call("/api/chat", {
       method: "POST",

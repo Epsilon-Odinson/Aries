@@ -453,6 +453,89 @@ body.mini .stage { justify-content: flex-end; padding-bottom: 12.5rem; }
 }
 .lock-screen button:hover { border-color: rgba(183, 139, 255, 0.55); }
 .pin-row { display: flex; gap: 0.5rem; }
+/* ---------- Settings polish (keep every feature; only the look changes) ---------- */
+/* Each settings section is a card: soft panel, hairline border, room to
+   breathe. The three tabs stay exactly where they are. */
+.more-sheet section {
+  background: var(--panel);
+  border: 1px solid var(--hairline);
+  border-radius: 16px;
+  padding: 1.1rem 1.25rem 1.35rem;
+  margin: 0 auto 1rem;
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+/* Section headings: small, tracked, purple-soft, with a hairline rule. */
+.more-sheet section h3 {
+  margin: 0 0 0.9rem;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--purple-soft);
+  padding-bottom: 0.6rem;
+  border-bottom: 1px solid var(--hairline);
+}
+.more-sheet section h3:not(:first-child) { margin-top: 1.5rem; }
+/* Sub-headings inside a card (ElevenLabs vs device voices). */
+.more-sheet section h4 {
+  margin: 1.2rem 0 0.4rem;
+  font-size: 0.85rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: var(--cream);
+}
+/* The voice picker is a divider-separated block inside the Aries card. */
+.voice-picker {
+  margin-top: 1.5rem;
+  padding-top: 0.25rem;
+  border-top: 1px solid var(--hairline);
+}
+.voice-picker h3 {
+  margin: 1.1rem 0 0.9rem;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--purple-soft);
+  padding-bottom: 0.6rem;
+  border-bottom: 1px solid var(--hairline);
+}
+/* Sheet header: title tracked like the rest of the app. */
+.more-head h2 {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+/* Tabs: roomier, consistent, with a soft hover. */
+.more-tabs { margin: 1.25rem 0 1.25rem; gap: 0.5rem; }
+.more-tabs button { padding: 0.5rem 1.05rem; font-weight: 600; font-size: 0.85rem; }
+.more-tabs button:hover { border-color: rgba(183, 139, 255, 0.55); }
+/* Buttons inside the sheet: hover lift, and a solid purple primary. */
+.more-sheet button:hover { border-color: rgba(183, 139, 255, 0.55); }
+.more-sheet button:focus-visible { outline: 2px solid var(--purple-soft); outline-offset: 2px; }
+/* Range sliders match the purple theme. */
+.more-sheet input[type="range"] { accent-color: var(--purple); padding: 0; background: transparent; border: none; }
+/* List rows: soft hover so the vault, tasks and voices read as rows. */
+.mem-list li:hover, .task-list li:hover, .voice-list li:hover { background: rgba(123, 47, 255, 0.07); }
+.mem-list li, .task-list li, .voice-list li { border-radius: 8px; padding-left: 0.5rem; padding-right: 0.5rem; }
+/* The memory file: a quiet, scrollable, read-only card. */
+.memory-file {
+  white-space: pre-wrap;
+  font-size: 0.9rem;
+  line-height: 1.65;
+  color: var(--cream-dim);
+  background: rgba(8, 0, 11, 0.5);
+  border: 1px solid var(--hairline);
+  border-radius: 12px;
+  padding: 0.9rem 1rem;
+  max-height: 320px;
+  overflow-y: auto;
+  margin: 0.5rem 0 0;
+}
+
 .shot-desc {
   background: rgba(19, 3, 30, 0.8); border: 1px solid rgba(183, 139, 255, 0.3);
   border-radius: 12px; padding: 0.9rem; margin-top: 0.75rem; line-height: 1.6;

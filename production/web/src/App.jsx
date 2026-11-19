@@ -20,6 +20,50 @@ const PERM_LABELS = {
 const MALE_VOICE_HINTS = ["male", "david", "daniel", "james", "guy", "brian", "alex", "fred", "george", "mark", "aaron", "oliver", "samuel"];
 const FEMALE_VOICE_HINTS = ["female", "samantha", "victoria", "karen", "moira", "tessa", "zira", "aria", "susan", "jenny", "sonia", "fiona", "kate", "serena", "linda"];
 
+// ElevenLabs talk-back: when the server has a voice key, Aries speaks
+// with a real narrator voice (Adam by default) instead of the phone's
+// built-in voices. The chosen ElevenLabs voice_id is saved per device
+// in localStorage, like the browser-voice pick.
+let elevenConfigured = false;
+let savedElevenVoiceId = null;
+try { savedElevenVoiceId = window.localStorage.getItem("ariesElevenVoice") || null; } catch { /* ignore */ }
+
+function setSavedElevenVoiceId(id) {
+  savedElevenVoiceId = id || null;
+  try {
+    if (id) window.localStorage.setItem("ariesElevenVoice", id);
+    else window.localStorage.removeItem("ariesElevenVoice");
+  } catch { /* ignore */ }
+}
+
+let elevenAudio = null;
+function stopAllSpeech() {
+  try { window.speechSynthesis.cancel(); } catch { /* ignore */ }
+  if (elevenAudio) {
+    try { elevenAudio.pause(); } catch { /* ignore */ }
+    elevenAudio = null;
+  }
+}
+
+// Returns true when ElevenLabs spoke the text, false when it is not
+// configured or the request failed (caller falls back to the browser).
+async function speakEleven(text) {
+  if (!elevenConfigured) return false;
+  try {
+    const blob = await api.tts(text, savedElevenVoiceId);
+    const url = URL.createObjectURL(blob);
+    stopAllSpeech();
+    const a = new Audio(url);
+    elevenAudio = a;
+    a.onended = () => {
+      URL.revokeObjectURL(url);
+      if (elevenAudio === a) elevenAudio = null;
+    };
+    await a.play();
+    return true;
+  } catch { return false; }
+}
+
 let cachedVoices = [];
 function loadVoices() {
   try {
@@ -61,15 +105,23 @@ function pickVoice() {
   return vs.find((v) => isEnglish(v) && !FEMALE_VOICE_HINTS.some((h) => lower(v).includes(h))) || null;
 }
 
-function speak(text, on) {
-  if (!on || !("speechSynthesis" in window)) return;
-  window.speechSynthesis.cancel();
+function speakBrowser(text) {
+  if (!("speechSynthesis" in window)) return;
+  stopAllSpeech();
   const u = new SpeechSynthesisUtterance(text);
   const v = pickVoice();
   if (v) u.voice = v;
   u.rate = 1;
   u.pitch = 0.9;
   window.speechSynthesis.speak(u);
+}
+
+// Talk-back: ElevenLabs narrator voice when the server has it,
+// the device's built-in voices when it doesn't.
+async function speak(text, on) {
+  if (!on) return;
+  if (await speakEleven(text)) return;
+  speakBrowser(text);
 }
 
 // Aries' replies appear as you read them — word by word, like he's
@@ -135,6 +187,8 @@ export default function App() {
   const [locked, setLocked] = useState(false);
   const [setupOpen, setSetupOpen] = useState(false);
   const [notice, setNotice] = useState("");
+  // ElevenLabs voices from the server (empty until the key is set).
+  const [eleven, setEleven] = useState({ configured: false, voices: [], defaultVoiceId: null, defaultVoiceName: "" });
   // Grain toggle swaps which baked grain image the veil shows.
   const [grain, setGrain] = useState("fine");
   // Burst button: each increment fires one burst from the veil's centre.
@@ -164,6 +218,19 @@ export default function App() {
 
   useEffect(() => {
     load();
+    // ElevenLabs voices: success means the server has a voice key.
+    // 503 means it doesn't — talk-back stays on the device's voices.
+    api.voices()
+      .then((v) => {
+        elevenConfigured = true;
+        setEleven({
+          configured: true,
+          voices: v.voices || [],
+          defaultVoiceId: v.default_voice_id || null,
+          defaultVoiceName: v.default_voice_name || "Adam",
+        });
+      })
+      .catch(() => { elevenConfigured = false; });
     const t = setInterval(async () => {
       try {
         const d = await api.dueTasks();
@@ -428,6 +495,10 @@ export default function App() {
           grain={grain}
           setGrain={setGrain}
           onBurst={() => setBurstSignal((n) => n + 1)}
+          elevenVoices={eleven.voices}
+          elevenConfigured={eleven.configured}
+          elevenDefaultId={eleven.defaultVoiceId}
+          elevenDefaultName={eleven.defaultVoiceName}
         />
       )}
 
@@ -508,13 +579,18 @@ function LockScreen({ data, onUnlock }) {
   );
 }
 
-// Let the user pick Aries' talk-back voice himself, from the voices on
-// this device. Tap Hear to try one, tap Use this voice to make Aries
-// speak with it. Saved per device in localStorage.
-function VoicePicker() {
+// Let the user pick Aries' talk-back voice himself. When the server has
+// an ElevenLabs key, the ElevenLabs voices come first — a real narrator
+// voice (Adam by default) that speaks every reply. Below them, the
+// voices on this device, which Aries uses only when ElevenLabs is off.
+// Tap Hear to try one, tap Use this voice to make Aries speak with it.
+// Both picks are saved per device in localStorage.
+function VoicePicker({ elevenVoices, elevenConfigured, elevenDefaultId, elevenDefaultName }) {
   const [voices, setVoices] = useState([]);
   const [selected, setSelected] = useState(savedVoiceName);
   const [previewing, setPreviewing] = useState("");
+  const [elevenSelected, setElevenSelected] = useState(savedElevenVoiceId);
+  const [elevenPreviewing, setElevenPreviewing] = useState("");
 
   useEffect(() => {
     const refresh = () => {
@@ -548,10 +624,61 @@ function VoicePicker() {
     setSelected(name);
   };
 
+  const previewEleven = async (voiceId) => {
+    setElevenPreviewing(voiceId);
+    try {
+      const blob = await api.tts("Aries active. Ready to cook.", voiceId);
+      const url = URL.createObjectURL(blob);
+      stopAllSpeech();
+      const a = new Audio(url);
+      elevenAudio = a;
+      a.onended = () => { URL.revokeObjectURL(url); setElevenPreviewing(""); };
+      a.onerror = () => setElevenPreviewing("");
+      await a.play();
+    } catch { setElevenPreviewing(""); }
+  };
+
+  const chooseEleven = (id) => {
+    setSavedElevenVoiceId(id);
+    setElevenSelected(id);
+  };
+
+  const elevenNow = elevenSelected
+    ? (elevenVoices || []).find((v) => v.voice_id === elevenSelected)?.name || "ElevenLabs voice"
+    : `${elevenDefaultName || "Adam"} (default)`;
+
   return (
-    <section>
+    <div className="voice-picker">
       <h3>Talk-back voice</h3>
-      <p className="fine">These are the voices on this device. Tap Hear to try one, then tap Use this voice to make Aries speak with it. Your pick is saved on this device only.</p>
+      {elevenConfigured ? (
+        <>
+          <h4>ElevenLabs voices</h4>
+          <p className="fine">A real narrator voice, served from the server. Tap Hear to try one, then Use this voice — this is the voice Aries speaks with.</p>
+          <p>Now using: <strong>{elevenNow}</strong></p>
+          <button onClick={() => chooseEleven(null)}>Use {elevenDefaultName || "Adam"} (default)</button>
+          {(elevenVoices || []).length === 0 && <p className="fine">No ElevenLabs voices listed — the server key may not have voices yet.</p>}
+          <ul className="voice-list">
+            {(elevenVoices || []).map((v) => (
+              <li key={v.voice_id} className={elevenSelected === v.voice_id ? "on" : ""}>
+                <span>{v.name}{" "}
+                  <span className="fine">
+                    {v.labels?.gender ? `(${v.labels.gender}${v.labels?.accent ? `, ${v.labels.accent}` : ""})` : ""}
+                  </span>
+                </span>
+                <span>
+                  <button onClick={() => previewEleven(v.voice_id)}>{elevenPreviewing === v.voice_id ? "Playing…" : "Hear"}</button>
+                  <button onClick={() => chooseEleven(v.voice_id)}>{elevenSelected === v.voice_id ? "✓ Using" : "Use this voice"}</button>
+                </span>
+              </li>
+            ))}
+          </ul>
+          <h4>Voices on this device</h4>
+          <p className="fine">Fallback only — used when the ElevenLabs voice is unavailable.</p>
+        </>
+      ) : (
+        <p className="fine">The ElevenLabs voice is not set up on the server yet — add the key in Render and Aries will speak with a real narrator voice. Until then, these are the voices on this device.</p>
+      )}
+      <p className="fine">Tap Hear to try one, then tap Use this voice to make Aries speak with it. Your pick is saved on this device only.</p>
       <p>Now using: <strong>{selected || "Aries' default (masculine)"}</strong></p>
       <button onClick={() => choose(null)}>Use Aries' default</button>
       {voices.length === 0 && <p>No English voices found on this device yet — try closing and reopening Settings.</p>}
@@ -566,11 +693,11 @@ function VoicePicker() {
           </li>
         ))}
       </ul>
-    </section>
+    </div>
   );
 }
 
-function MoreSheet({ data, tab, setTab, onClose, useSearch, setUseSearch, talkBack, setTalkBack, wakeOn, setWakeOn, grain, setGrain, onBurst }) {
+function MoreSheet({ data, tab, setTab, onClose, useSearch, setUseSearch, talkBack, setTalkBack, wakeOn, setWakeOn, grain, setGrain, onBurst, elevenVoices, elevenConfigured, elevenDefaultId, elevenDefaultName }) {
   const [person, setPerson] = useState(data.personality);
   const [profile, setProfile] = useState(data.profile);
   const [memText, setMemText] = useState("");
@@ -672,7 +799,12 @@ function MoreSheet({ data, tab, setTab, onClose, useSearch, setUseSearch, talkBa
             <textarea value={profile.about} onChange={(e) => setProfile({ ...profile, about: e.target.value })} rows="3" />
           </label>
           <button onClick={saveProfile}>Save profile</button>
-          <VoicePicker />
+          <VoicePicker
+            elevenVoices={elevenVoices}
+            elevenConfigured={elevenConfigured}
+            elevenDefaultId={elevenDefaultId}
+            elevenDefaultName={elevenDefaultName}
+          />
           <h3>Talk &amp; search</h3>
           <div className="toggle-row">
             <button className="pill" type="button" aria-pressed={talkBack} onClick={() => setTalkBack((v) => !v)}>
@@ -710,6 +842,13 @@ function MoreSheet({ data, tab, setTab, onClose, useSearch, setUseSearch, talkBa
             ))}
           </ul>
           {memories.length === 0 && <p>No memories yet. Teach Aries something above, or say “remember …” in chat.</p>}
+          <h3>About you — from Aries' memory file</h3>
+          <p className="fine">Durable facts Aries always knows, kept in its memory file on the server. This is read-only — day-to-day things Aries learns live in the vault above.</p>
+          {data.memory_file ? (
+            <div className="memory-file">{data.memory_file}</div>
+          ) : (
+            <p className="fine">No memory file on the server yet.</p>
+          )}
           <h3>Full history</h3>
           <button onClick={async () => { if (confirm("Clear all chat history?")) { await api.clearChat(true); onClose(); } }}>
             Clear chat history

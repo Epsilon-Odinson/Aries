@@ -30,13 +30,14 @@ load_dotenv()
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from PIL import Image
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from . import face as face_mod
+from . import voice as voice_mod
 from .db import (
     FaceEnrollment,
     Memory,
@@ -57,7 +58,7 @@ from .permissions import (
     require,
     set_setting,
 )
-from .personality import build_system_prompt
+from .personality import MEMORY_TEXT, build_system_prompt
 from .search import looks_like_current_question, search_web
 
 app = FastAPI(title="Aries", version="0.4.0")
@@ -87,7 +88,48 @@ def health():
         "version": "0.4.0",
         "key_configured": bool(os.getenv("NVIDIA_API_KEY")),
         "vision_configured": bool(os.getenv("VISION_MODEL")),
+        "elevenlabs_configured": voice_mod.configured(),
         "db": "postgres" if os.getenv("DATABASE_URL") else "sqlite",
+    }
+
+
+# ---------------------------------------------------------------- voice (ElevenLabs)
+
+# Talk-back speaks with a real narrator voice when the server has an
+# ELEVENLABS_API_KEY. No key -> clean 503, and the frontend falls back
+# to the device's built-in voices. The key is never accepted from, or
+# sent to, any client.
+
+
+class TTSIn(BaseModel):
+    text: str
+    voice_id: str | None = None
+
+
+@app.post("/api/tts")
+def tts(body: TTSIn):
+    try:
+        audio = voice_mod.synthesize(body.text, body.voice_id)
+    except voice_mod.VoiceNotConfigured:
+        raise HTTPException(503, "voice service not configured") from None
+    except voice_mod.VoiceError as exc:
+        raise HTTPException(502, str(exc)) from exc
+    return Response(content=audio, media_type="audio/mpeg")
+
+
+@app.get("/api/voices")
+def voices():
+    try:
+        vs = voice_mod.list_voices()
+    except voice_mod.VoiceNotConfigured:
+        raise HTTPException(503, "voice service not configured") from None
+    except voice_mod.VoiceError as exc:
+        raise HTTPException(502, str(exc)) from exc
+    return {
+        "configured": True,
+        "default_voice_id": voice_mod.DEFAULT_VOICE_ID,
+        "default_voice_name": voice_mod.DEFAULT_VOICE_NAME,
+        "voices": vs,
     }
 
 
@@ -164,6 +206,7 @@ def state(db: Session = Depends(get_db)):
     return {
         "profile": _profile_dict(db),
         "personality": person,
+        "memory_file": MEMORY_TEXT,
         "memories": [
             {
                 "id": m.id,

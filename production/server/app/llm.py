@@ -44,7 +44,7 @@ def chat(
     messages: list[dict],
     model: str = CHAT_MODEL,
     temperature: float = 0.7,
-    max_tokens: int = 1024,
+    max_tokens: int = 2048,
     timeout: int = DEFAULT_TIMEOUT,
 ) -> str:
     """Send a chat conversation to the model and return the reply text."""

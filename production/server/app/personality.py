@@ -12,17 +12,22 @@ from __future__ import annotations
 from pathlib import Path
 
 # SOUL.md and MEMORY.md live in the server directory (the directory
-# containing app/). They are copied into the image by the Dockerfile.
-# Read once at module load; fall back to empty if a file is missing —
-# the chat must never crash because a file is absent.
+# containing app/) in the Docker image — the Dockerfile copies them
+# there. In a local checkout they sit one level up, in production/,
+# so try that too. Read once at module load; fall back to empty if a
+# file is missing — the chat must never crash because a file is absent.
 _SERVER_DIR = Path(__file__).resolve().parent.parent
 
 
 def _read_file(name: str) -> str:
-    try:
-        return (_SERVER_DIR / name).read_text(encoding="utf-8").strip()
-    except Exception:
-        return ""
+    for base in (_SERVER_DIR, _SERVER_DIR.parent):
+        try:
+            text = (base / name).read_text(encoding="utf-8").strip()
+            if text:
+                return text
+        except Exception:
+            continue
+    return ""
 
 
 SOUL_TEXT = _read_file("SOUL.md")
