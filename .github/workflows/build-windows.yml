@@ -1,0 +1,77 @@
+# Build the Aries desktop app as a Windows .exe and publish it as a
+# GitHub Release asset.
+#
+# Trigger it by pushing a tag like v0.4.0-desktop, or by hand from the
+# Actions tab (workflow_dispatch). The .exe is a single file
+# (PyInstaller --onefile): download it, run it, no install needed.
+# On first run, open Settings (gear icon, top right) and paste the
+# NVIDIA API key — it is saved in the Windows Credential Manager,
+# so no environment variable is needed.
+#
+# The release step only runs for tag pushes. A manual dispatch just
+# builds and uploads the .exe as a workflow artifact, so a build can
+# be checked before it is released.
+
+name: Build Windows .exe
+
+on:
+  push:
+    tags:
+      - "v*-desktop"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Check out the repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Check Python syntax
+        run: python -m compileall -q aries run_aries.py
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Build the .exe
+        run: |
+          pyinstaller --onefile --windowed --name Aries --clean `
+            --hidden-import keyring `
+            --hidden-import pyautogui `
+            --hidden-import psutil `
+            --hidden-import pyperclip `
+            run_aries.py
+
+      - name: Check the .exe exists
+        run: |
+          if (-not (Test-Path dist\Aries.exe)) { exit 1 }
+          $size = (Get-Item dist\Aries.exe).Length / 1MB
+          Write-Host "Aries.exe built: $([math]::Round($size, 1)) MB"
+
+      - name: Upload the .exe as a workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Aries-windows-exe
+          path: dist/Aries.exe
+          if-no-files-found: error
+
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          gh release create "${{ github.ref_name }}" `
+            --title "Aries desktop ${{ github.ref_name }}" `
+            --notes "Windows .exe build of the Aries desktop app. Download Aries.exe below and run it — no install needed. On first run, open Settings (gear icon, top right) and paste your NVIDIA API key; it is saved in the Windows Credential Manager. PC control is off by default — turn it on in Settings if you want Aries to act on your PC." `
+            "dist/Aries.exe"
+        env:
+          GH_TOKEN: ${{ github.token }}
