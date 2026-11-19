@@ -9,6 +9,7 @@ and the day-to-day memories recalled from the database.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 # SOUL.md and MEMORY.md live in the server directory (the directory
@@ -32,6 +33,41 @@ def _read_file(name: str) -> str:
 
 SOUL_TEXT = _read_file("SOUL.md")
 MEMORY_TEXT = _read_file("MEMORY.md")
+
+# Deterministic guard for the greeting. The system prompt says the
+# greeting is one-time-only, but the model still opens replies with
+# it — the greeting is too strongly tied to Aries' identity, and the
+# model treats a new conversation as "waking up". So the backend
+# strips a leading greeting from the reply before it is stored or
+# returned, and from assistant turns in the history fed back to the
+# model (old stored replies would otherwise prime it to greet again).
+_GREETING_PREFIX_RE = re.compile(
+    r"""^\s*["'*_]*\s*aries\s+active[.!?,;:\-—–]*\s*ready\s+to\s+cook[.!?,;:\-—–]*["'*_]*\s*""",
+    re.IGNORECASE,
+)
+
+
+def strip_greeting_prefix(text: str) -> str:
+    """Remove a leading 'Aries active. Ready to cook.' from a reply.
+
+    Only a prefix at the very start is removed; the phrase later in
+    the text is left alone. Matching is case-insensitive and tolerates
+    surrounding whitespace, an optional quote/markdown wrapper, and a
+    trailing period, comma, newline, or nothing. If the reply is
+    nothing but the greeting, a short neutral opener is returned
+    instead of an empty string.
+    """
+    stripped = text
+    for _ in range(3):
+        new = _GREETING_PREFIX_RE.sub("", stripped, count=1)
+        if new == stripped:
+            break
+        stripped = new
+    # Only fall back when a greeting was actually stripped and nothing
+    # is left; an input that was already empty stays untouched.
+    if stripped != text and not stripped.strip():
+        return "Hey."
+    return stripped
 
 VOICES = {
     "companion": (
@@ -114,9 +150,10 @@ def build_system_prompt(
         )
     parts.append(
         "You refer to yourself as Aries. Your greeting, used only once "
-        "when you first wake up, is 'Aries active. Ready to cook.' Never "
-        "open a reply with it — just answer the user directly. Answer in "
-        "the user's language. If you do not know something, say so — never "
+        "when you first wake up, is 'Aries active. Ready to cook.' Do not "
+        "start any reply with this greeting, not even the first message of "
+        "a conversation — just answer the user directly. Answer in the "
+        "user's language. If you do not know something, say so — never "
         "invent facts, dates, prices, or sources."
     )
     return "\n".join(parts)

@@ -58,7 +58,7 @@ from .permissions import (
     require,
     set_setting,
 )
-from .personality import MEMORY_TEXT, build_system_prompt
+from .personality import MEMORY_TEXT, build_system_prompt, strip_greeting_prefix
 from .search import looks_like_current_question, search_web
 
 app = FastAPI(title="Aries", version="0.4.0")
@@ -477,7 +477,15 @@ def chat_endpoint(body: ChatIn, db: Session = Depends(get_db)):
         memories=_recall_memories(db, text),
     )
     history = [
-        {"role": m.role if m.role in ("user", "assistant") else "assistant", "content": m.content}
+        {
+            "role": m.role if m.role in ("user", "assistant") else "assistant",
+            # Strip the greeting from old assistant turns too: stored
+            # replies that open with it would prime the model to greet
+            # again on the next turn.
+            "content": strip_greeting_prefix(m.content)
+            if m.role != "user"
+            else m.content,
+        }
         for m in db.query(Message)
         .filter_by(user_key=USER)
         .order_by(Message.created_at.desc())
@@ -494,6 +502,10 @@ def chat_endpoint(body: ChatIn, db: Session = Depends(get_db)):
         reply = llm_chat(messages)
     except AriesLLMError as exc:
         reply = str(exc)
+    # Deterministic guard: the prompt says the greeting is one-time-only,
+    # but the model still opens replies with it. Strip it here, before the
+    # reply is stored or returned, so it can never open a reply.
+    reply = strip_greeting_prefix(reply)
     db.add(Message(user_key=USER, role="aries", content=reply, sources=_sources_json(sources)))
     db.commit()
     return ChatOut(
