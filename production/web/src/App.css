@@ -1,3 +1,10 @@
+/* Aries production app — makoma.io design language (dark theme).
+   Palette, sampled from makoma.io:
+   bg #060607 · surface #111114 · cream text #ECE6D8 · muted #ADA798
+   placeholder #9A9285 · bright gold #F2B544 · gold gradient #BE911A→#EDB13F
+   dark text on gold #352812 · hairline #605B56 · divider #181717
+   Fonts: Instrument Sans (body/headings), Instrument Serif Italic
+   (accent words only). No purple anywhere. */
 * {
   box-sizing: border-box;
 }
@@ -10,9 +17,9 @@ body,
 }
 
 body {
-  background: #0d0010;
-  color: #e8d5ff;
-  font-family: 'Segoe UI', system-ui, sans-serif;
+  background: #060607;
+  color: #ECE6D8;
+  font-family: 'Instrument Sans', 'Segoe UI', system-ui, sans-serif;
 }
 
 .aries-hero {
@@ -25,13 +32,12 @@ body {
 .aries-veil {
   position: absolute;
   inset: 0;
-  /* Fallback so the page is never black if the veil images fail:
-     the same purple nebula, as plain CSS gradients. */
+  /* Fallback so the page is never black if the veil image fails:
+     faint warm gold on near-black. */
   background:
-    radial-gradient(ellipse 60% 50% at 70% 20%, rgba(123, 47, 255, 0.55), transparent 70%),
-    radial-gradient(ellipse 50% 40% at 20% 75%, rgba(88, 28, 180, 0.5), transparent 70%),
-    radial-gradient(ellipse 40% 35% at 45% 45%, rgba(168, 85, 247, 0.35), transparent 70%),
-    #0d0010;
+    radial-gradient(ellipse 60% 50% at 70% 20%, rgba(242, 181, 68, 0.10), transparent 70%),
+    radial-gradient(ellipse 50% 40% at 20% 75%, rgba(190, 145, 26, 0.10), transparent 70%),
+    #060607;
 }
 
 .veil-toggle {
@@ -40,9 +46,9 @@ body {
   bottom: 16px;
   z-index: 5;
   border-radius: 999px;
-  border: 1px solid rgba(123, 47, 255, 0.6);
-  background: rgba(13, 0, 16, 0.72);
-  color: #e8d5ff;
+  border: 1px solid #605B56;
+  background: rgba(6, 6, 7, 0.72);
+  color: #ECE6D8;
   font-size: 0.8rem;
   padding: 0.35rem 0.8rem;
   cursor: pointer;
@@ -87,7 +93,7 @@ body {
   font-style: italic;
   font-size: clamp(1.25rem, 3vw, 2rem);
   margin: 0.25rem 0 0;
-  color: #f4f1ea;
+  color: #F1E6CB;
 }
 
 .aries-overlay .sub {
@@ -95,7 +101,7 @@ body {
   font-size: 0.95rem;
   letter-spacing: 0.14em;
   text-transform: uppercase;
-  color: #bf7fff;
+  color: #F2B544;
 }
 
 /* ---- Aries production app ---- */
@@ -103,7 +109,7 @@ body {
 .aries-loading, .aries-error {
   min-height: 100vh; display: flex; flex-direction: column;
   align-items: center; justify-content: center; gap: 0.5rem;
-  background: #0d0010; color: #e8d5ff; font-family: 'Segoe UI', system-ui, sans-serif;
+  background: #060607; color: #ECE6D8; font-family: 'Instrument Sans', 'Segoe UI', system-ui, sans-serif;
   text-align: center; padding: 2rem;
 }
 .aries-hero {
@@ -114,21 +120,23 @@ body {
 .aries-lockup h1 { margin: 0.5rem 0 0; line-height: 1; }
 .word-aries {
   display: block; font-size: clamp(2.75rem, 8vw, 5.5rem); font-weight: 800;
-  letter-spacing: 0.16em; color: #f5f0e0;
+  letter-spacing: 0.16em; color: #ECE6D8;
 }
 .word-active {
-  display: block; font-family: Georgia, 'Times New Roman', serif; font-style: italic;
-  font-size: clamp(1.5rem, 4vw, 2.5rem); color: #f5f0e0; margin-top: 0.1rem;
+  display: block; font-family: 'Instrument Serif', Georgia, 'Times New Roman', serif; font-style: italic;
+  font-size: clamp(1.5rem, 4vw, 2.5rem); color: #F1E6CB; margin-top: 0.1rem;
 }
 .cook {
-  display: block; font-family: Georgia, 'Times New Roman', serif; font-style: italic;
-  font-size: 1rem; color: #bf7fff; opacity: 0.72; margin-top: 0.4rem;
+  display: block; font-family: 'Instrument Serif', Georgia, 'Times New Roman', serif; font-style: italic;
+  font-size: 1rem; margin-top: 0.4rem;
+  background: linear-gradient(90deg, #BE9019, #DCA532, #F5C360, #FDE7A9, #DEAB4A);
+  -webkit-background-clip: text; background-clip: text; color: transparent;
 }
 .status-line {
   margin: 0.75rem 0 0; font-size: 0.75rem; letter-spacing: 0.3em; text-transform: uppercase;
-  color: #e8d5ff; display: flex; align-items: center; gap: 0.5rem; justify-content: center;
+  color: #ADA798; display: flex; align-items: center; gap: 0.5rem; justify-content: center;
 }
-.status-dot { width: 8px; height: 8px; border-radius: 50%; background: #d9a441; display: inline-block; }
+.status-dot { width: 8px; height: 8px; border-radius: 50%; background: #F2B544; display: inline-block; }
 .aries-face { background: transparent; border: none; cursor: pointer; padding: 0; }
 .aries-face svg { display: block; }
 .aries-face .face-antenna { animation: face-bob 3s ease-in-out infinite; }
@@ -144,76 +152,81 @@ body {
 .latest-reply { max-width: 640px; background: transparent; }
 /* Layered dark halo keeps the reply readable where it crosses the brightest
    dithered areas — no bubble, the text still sits straight on the veil. */
-.latest-reply p { margin: 0; font-size: 1.05rem; line-height: 1.6; color: #f5f0e0; text-shadow: 0 0 10px rgba(0,0,0,0.9), 0 1px 14px rgba(0,0,0,0.85), 0 2px 28px rgba(0,0,0,0.7); }
-.latest-hint { color: #bf7fff; letter-spacing: 0.05em; text-shadow: 0 0 10px rgba(0,0,0,0.9), 0 1px 14px rgba(0,0,0,0.85); }
+.latest-reply p { margin: 0; font-size: 1.05rem; line-height: 1.6; color: #ECE6D8; text-shadow: 0 0 10px rgba(0,0,0,0.9), 0 1px 14px rgba(0,0,0,0.85), 0 2px 28px rgba(0,0,0,0.7); }
+.latest-hint { color: #ADA798; letter-spacing: 0.05em; text-shadow: 0 0 10px rgba(0,0,0,0.9), 0 1px 14px rgba(0,0,0,0.85); }
 .sources { text-align: left; margin-top: 0.75rem; font-size: 0.85rem; }
 .sources ul { margin: 0.25rem 0 0; padding-left: 1.1rem; }
-.sources a { color: #bf7fff; text-shadow: 0 0 8px rgba(0,0,0,0.9), 0 1px 10px rgba(0,0,0,0.8); }
+.sources a { color: #F2B544; text-shadow: 0 0 8px rgba(0,0,0,0.9), 0 1px 10px rgba(0,0,0,0.8); }
 .composer-row {
   display: flex; gap: 0.5rem; align-items: center; width: min(640px, 92vw);
-  background: rgba(13, 0, 16, 0.72); border: 1px solid rgba(123, 47, 255, 0.45);
+  background: #111114; border: 1px solid #605B56;
   border-radius: 999px; padding: 0.4rem 0.5rem;
 }
 .composer-row input {
   flex: 1; min-width: 0; background: transparent; border: none; outline: none;
-  color: #f5f0e0; font-size: 1rem; font-family: 'Segoe UI', system-ui, sans-serif; padding: 0.5rem;
+  color: #ECE6D8; font-size: 1rem; font-family: 'Instrument Sans', 'Segoe UI', system-ui, sans-serif; padding: 0.5rem;
 }
+.composer-row input::placeholder { color: #9A9285; }
 .composer-row button, .hero-tools button, .mini-tools button {
-  border: 1px solid rgba(123, 47, 255, 0.6); background: #1a0530; color: #e8d5ff;
+  border: 1px solid #605B56; background: transparent; color: #ECE6D8;
   border-radius: 999px; padding: 0.55rem 0.9rem; cursor: pointer; font-size: 0.9rem;
 }
-.composer-row button.globe.on { background: #7b2fff; color: #fff; }
+.composer-row button.send {
+  background: linear-gradient(90deg, #BE911A, #EDB13F); color: #352812;
+  border: none; font-weight: 600;
+}
+.composer-row button.globe.on { background: #F2B544; color: #352812; border-color: #F2B544; }
 .hero-tools { display: flex; gap: 0.75rem; align-items: center; flex-wrap: wrap; justify-content: center; }
-.toggle { display: flex; align-items: center; gap: 0.35rem; font-size: 0.9rem; color: #e8d5ff; cursor: pointer; }
+.toggle { display: flex; align-items: center; gap: 0.35rem; font-size: 0.9rem; color: #ADA798; cursor: pointer; }
 .notice {
-  max-width: 640px; background: rgba(217, 164, 65, 0.16); border: 1px solid #d9a441;
-  border-radius: 12px; padding: 0.6rem 0.9rem; font-size: 0.9rem; cursor: pointer;
+  max-width: 640px; background: rgba(242, 181, 68, 0.10); border: 1px solid #C89639;
+  border-radius: 12px; padding: 0.6rem 0.9rem; font-size: 0.9rem; cursor: pointer; color: #ECE6D8;
 }
 .due-card {
-  background: rgba(217, 164, 65, 0.18); border: 1px solid #d9a441; border-radius: 12px;
+  background: rgba(242, 181, 68, 0.12); border: 1px solid #C89639; border-radius: 12px;
   padding: 0.7rem 1rem; display: flex; gap: 0.6rem; align-items: center; max-width: 640px;
 }
-.due-card button { border-radius: 999px; border: 1px solid #d9a441; background: transparent; color: #f5f0e0; padding: 0.3rem 0.7rem; cursor: pointer; }
+.due-card button { border-radius: 999px; border: 1px solid #605B56; background: transparent; color: #ECE6D8; padding: 0.3rem 0.7rem; cursor: pointer; }
 
 /* mini mode: floating bottom-right, just above the taskbar */
 .mini-panel {
   position: fixed; right: 16px; bottom: 16px; width: min(360px, 92vw);
-  background: rgba(13, 0, 16, 0.92); border: 1px solid rgba(123, 47, 255, 0.55);
-  border-radius: 18px; padding: 1rem; z-index: 40; box-shadow: 0 12px 40px rgba(0,0,0,0.6);
+  background: rgba(17, 17, 20, 0.92); border: 1px solid #605B56;
+  border-radius: 8px; padding: 1rem; z-index: 40; box-shadow: 0 12px 40px rgba(0,0,0,0.6);
   display: flex; flex-direction: column; align-items: center; gap: 0.5rem; text-align: center;
 }
-.mini-status { margin: 0; font-size: 0.75rem; letter-spacing: 0.25em; color: #bf7fff; }
-.mini-reply { margin: 0; font-size: 0.95rem; line-height: 1.5; color: #f5f0e0; background: transparent; }
+.mini-status { margin: 0; font-size: 0.75rem; letter-spacing: 0.25em; color: #ADA798; }
+.mini-reply { margin: 0; font-size: 0.95rem; line-height: 1.5; color: #ECE6D8; background: transparent; }
 .composer-row.mini { width: 100%; }
 .mini-tools { display: flex; gap: 0.5rem; flex-wrap: wrap; justify-content: center; }
 
 /* settings sheet */
 .more-sheet {
-  position: fixed; inset: 0; z-index: 50; background: rgba(5, 0, 8, 0.92);
-  overflow-y: auto; padding: 2rem 1rem 4rem; color: #e8d5ff;
+  position: fixed; inset: 0; z-index: 50; background: rgba(6, 6, 7, 0.94);
+  overflow-y: auto; padding: 2rem 1rem 4rem; color: #ECE6D8;
 }
 .more-sheet > * { max-width: 720px; margin-left: auto; margin-right: auto; }
 .more-head { display: flex; justify-content: space-between; align-items: center; }
 .more-tabs { display: flex; gap: 0.4rem; flex-wrap: wrap; margin: 1rem 0; }
 .more-tabs button {
-  border: 1px solid rgba(123, 47, 255, 0.55); background: transparent; color: #e8d5ff;
+  border: 1px solid #605B56; background: transparent; color: #ECE6D8;
   border-radius: 999px; padding: 0.4rem 0.8rem; cursor: pointer; text-transform: capitalize;
 }
-.more-tabs button.on { background: #7b2fff; }
+.more-tabs button.on { background: linear-gradient(90deg, #BE911A, #EDB13F); color: #352812; border: none; }
 .more-sheet section label { display: block; margin: 0.75rem 0; }
 .more-sheet input, .more-sheet select, .more-sheet textarea {
   display: block; width: 100%; margin-top: 0.3rem; padding: 0.6rem;
-  background: #1a0530; border: 1px solid rgba(123, 47, 255, 0.5); color: #f5f0e0;
-  border-radius: 10px; font-family: 'Segoe UI', system-ui, sans-serif;
+  background: #111114; border: 1px solid #3C3B39; color: #ECE6D8;
+  border-radius: 10px; font-family: 'Instrument Sans', 'Segoe UI', system-ui, sans-serif;
 }
 .more-sheet button {
-  border: 1px solid rgba(123, 47, 255, 0.6); background: #1a0530; color: #e8d5ff;
+  border: 1px solid #605B56; background: transparent; color: #ECE6D8;
   border-radius: 999px; padding: 0.5rem 0.9rem; cursor: pointer; margin: 0.25rem 0.25rem 0.25rem 0;
 }
 .mem-list, .task-list { list-style: none; padding: 0; }
 .mem-list li, .task-list li {
   display: flex; justify-content: space-between; gap: 0.75rem; align-items: center;
-  border-bottom: 1px solid rgba(123, 47, 255, 0.25); padding: 0.6rem 0;
+  border-bottom: 1px solid #181717; padding: 0.6rem 0;
 }
 .mem-list li.pending { opacity: 0.75; font-style: italic; }
 .task-list li.done span { text-decoration: line-through; opacity: 0.6; }
@@ -222,7 +235,7 @@ body {
 .fine { font-size: 0.85rem; opacity: 0.75; }
 .history { margin-top: 1rem; }
 .hist-msg { margin: 0.75rem 0; line-height: 1.55; background: transparent; }
-.hist-msg.aries { color: #f5f0e0; }
+.hist-msg.aries { color: #ECE6D8; }
 
 /* permission modal + wizard + lock */
 .perm-modal, .wizard {
@@ -230,13 +243,17 @@ body {
   display: flex; align-items: center; justify-content: center; padding: 1rem;
 }
 .perm-card, .wizard-card {
-  background: #160329; border: 1px solid #7b2fff; border-radius: 18px;
-  padding: 1.5rem; max-width: 480px; width: 100%; color: #e8d5ff;
+  background: #111114; border: 1px solid #605B56; border-radius: 8px;
+  padding: 1.5rem; max-width: 480px; width: 100%; color: #ECE6D8;
 }
 .perm-actions, .wizard-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-top: 1rem; }
 .perm-card button, .wizard-card button, .wizard-card select, .wizard-card input {
-  border: 1px solid rgba(123, 47, 255, 0.6); background: #1a0530; color: #e8d5ff;
+  border: 1px solid #605B56; background: transparent; color: #ECE6D8;
   border-radius: 999px; padding: 0.55rem 0.9rem; cursor: pointer;
+}
+.wizard-actions button:last-child {
+  background: linear-gradient(90deg, #BE911A, #EDB13F); color: #352812;
+  border: none; font-weight: 600;
 }
 .wizard-card label { display: block; margin: 0.75rem 0; }
 .wizard-card input, .wizard-card select { border-radius: 10px; width: 100%; }
@@ -244,10 +261,10 @@ body {
   position: relative; min-height: 100vh; display: flex; flex-direction: column;
   align-items: center; justify-content: center; gap: 0.75rem; padding: 2rem; text-align: center;
 }
-.lock-screen input { padding: 0.6rem; border-radius: 10px; border: 1px solid #7b2fff; background: #1a0530; color: #f5f0e0; }
-.lock-screen button { border-radius: 999px; border: 1px solid #7b2fff; background: #1a0530; color: #e8d5ff; padding: 0.55rem 0.9rem; cursor: pointer; }
+.lock-screen input { padding: 0.6rem; border-radius: 10px; border: 1px solid #605B56; background: #111114; color: #ECE6D8; }
+.lock-screen button { border-radius: 999px; border: 1px solid #605B56; background: transparent; color: #ECE6D8; padding: 0.55rem 0.9rem; cursor: pointer; }
 .pin-row { display: flex; gap: 0.5rem; }
-.shot-desc { background: rgba(13,0,16,0.6); border: 1px solid rgba(123,47,255,0.4); border-radius: 12px; padding: 0.9rem; margin-top: 0.75rem; line-height: 1.6; }
+.shot-desc { background: rgba(17,17,20,0.8); border: 1px solid #3C3B39; border-radius: 12px; padding: 0.9rem; margin-top: 0.75rem; line-height: 1.6; }
 @media (max-width: 600px) {
   .aries-hero { padding-top: 1rem; }
 }

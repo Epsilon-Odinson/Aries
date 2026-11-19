@@ -230,13 +230,13 @@ export default function App() {
         <DitherVeil
           pattern="floyd"
           pixelSize={grain === "fine" ? 2 : 4}
-          inkColor="#120f17"
-          paperColor="#f4f1ea"
+          inkColor="#060607"
+          paperColor="#ece6d8"
           revealRadius={200}
           softness={0.6}
           linger={1}
           rim={0.15}
-          rimColor="#d9a441"
+          rimColor="#F2B544"
           fit="cover"
         />
       </div>

@@ -8,9 +8,7 @@ export default function Face({ state = "idle", size = 320, onClick, label }) {
       ? "#35e0ff"
       : state === "error"
         ? "#ff5d5d"
-        : state === "speaking"
-          ? "#bf7fff"
-          : "#7b2fff";
+        : "#F2B544";
   const cls = `aries-face state-${state}`;
   return (
     <button
@@ -23,25 +21,25 @@ export default function Face({ state = "idle", size = 320, onClick, label }) {
     >
       <svg viewBox="0 0 200 200" width={size} height={size} aria-hidden="true">
         {/* antenna */}
-        <line x1="100" y1="18" x2="100" y2="38" stroke="#7b2fff" strokeWidth="4" strokeLinecap="round" />
+        <line x1="100" y1="18" x2="100" y2="38" stroke="#F2B544" strokeWidth="4" strokeLinecap="round" />
         <circle cx="100" cy="14" r="6" fill={glow} className="face-antenna" />
         {/* head: angular machine shell */}
         <path
           d="M40 55 L160 55 L178 80 L178 140 L160 168 L40 168 L22 140 L22 80 Z"
-          fill="#12041f"
-          stroke="#7b2fff"
+          fill="#111114"
+          stroke="#605B56"
           strokeWidth="2.5"
         />
         {/* vent slots */}
-        <line x1="70" y1="48" x2="90" y2="48" stroke="#3d0070" strokeWidth="4" strokeLinecap="round" />
-        <line x1="110" y1="48" x2="130" y2="48" stroke="#3d0070" strokeWidth="4" strokeLinecap="round" />
+        <line x1="70" y1="48" x2="90" y2="48" stroke="#3C3B39" strokeWidth="4" strokeLinecap="round" />
+        <line x1="110" y1="48" x2="130" y2="48" stroke="#3C3B39" strokeWidth="4" strokeLinecap="round" />
         {/* side plates */}
-        <rect x="14" y="96" width="10" height="34" rx="3" fill="#3d0070" />
-        <rect x="176" y="96" width="10" height="34" rx="3" fill="#3d0070" />
+        <rect x="14" y="96" width="10" height="34" rx="3" fill="#3C3B39" />
+        <rect x="176" y="96" width="10" height="34" rx="3" fill="#3C3B39" />
         {/* hexagonal visor */}
         <path
           d="M52 92 L148 92 L162 112 L148 132 L52 132 L38 112 Z"
-          fill="#05010a"
+          fill="#060607"
           stroke={glow}
           strokeWidth="2"
           className="face-visor"
