@@ -109,7 +109,10 @@ def synthesize(text: str, voice_id: str | None = None) -> bytes:
                 "text": text,
                 "model_id": MODEL_ID,
                 "voice_settings": {
-                    "stability": 0.5,
+                    # Stability 0.4 (a touch below the 0.5 default) so the
+                    # spoken voice carries a little more feeling and
+                    # variation, while staying natural and steady.
+                    "stability": 0.4,
                     "similarity_boost": 0.75,
                 },
             },
