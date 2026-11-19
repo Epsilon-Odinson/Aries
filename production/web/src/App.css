@@ -34,26 +34,6 @@ body {
     #0d0010;
 }
 
-.veil-img {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  display: block;
-}
-
-.veil-rim {
-  position: absolute;
-  transform: translate(-50%, -50%);
-  border-radius: 50%;
-  pointer-events: none;
-  border: 1px solid rgba(217, 164, 65, 0.55);
-  box-shadow:
-    0 0 42px 6px rgba(217, 164, 65, 0.28),
-    inset 0 0 42px rgba(217, 164, 65, 0.16);
-}
-
 .veil-toggle {
   position: absolute;
   right: 16px;
@@ -67,6 +47,22 @@ body {
   padding: 0.35rem 0.8rem;
   cursor: pointer;
 }
+
+/* The real DitherVeil tracks the pointer on its own layer, so the hero
+   and mini panel must let pointer events pass through to it — except on
+   the controls themselves, which stay clickable. */
+.aries-hero { pointer-events: none; }
+.aries-hero .aries-face,
+.aries-hero .due-card,
+.aries-hero .composer-row,
+.aries-hero .hero-tools,
+.aries-hero .notice { pointer-events: auto; }
+.aries-hero .latest-reply a { pointer-events: auto; }
+.mini-panel { pointer-events: none; }
+.mini-panel .aries-face,
+.mini-panel .due-card,
+.mini-panel .composer-row,
+.mini-panel .mini-tools { pointer-events: auto; }
 
 .aries-overlay {
   position: absolute;

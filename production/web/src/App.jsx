@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { NEBULA_SRC } from "./nebulaImage.js";
-import { VEIL_FINE, VEIL_COARSE } from "./veilLayers.js";
+import DitherVeil from "./DitherVeil.jsx";
 import Face from "./Face.jsx";
 import { api } from "./api.js";
 
@@ -41,28 +40,11 @@ export default function App() {
   const [locked, setLocked] = useState(false);
   const [setupOpen, setSetupOpen] = useState(false);
   const [notice, setNotice] = useState("");
-  const [pointer, setPointer] = useState(null);
-  const [burst, setBurst] = useState(0);
+  // Grain toggle drives DitherVeil's dither cell size: fine = 2px, coarse = 4px.
   const [grain, setGrain] = useState("fine");
   const wakeRef = useRef(null);
   const inputRef = useRef(null);
-  const appRef = useRef(null);
 
-  const onVeilMove = (e) => {
-    const r = appRef.current?.getBoundingClientRect();
-    if (!r) return;
-    setPointer({ x: e.clientX - r.left, y: e.clientY - r.top });
-  };
-  const onVeilDown = (e) => {
-    onVeilMove(e);
-    setBurst(140);
-    setTimeout(() => setBurst(0), 400);
-  };
-  const revealRadius = 200 + burst;
-  const veilSrc = grain === "fine" ? VEIL_FINE : VEIL_COARSE;
-  const veilMask = pointer
-    ? `radial-gradient(circle ${revealRadius}px at ${pointer.x}px ${pointer.y}px, transparent 0%, transparent 55%, black 82%)`
-    : "none";
 
   const load = useCallback(async () => {
     try {
@@ -243,33 +225,20 @@ export default function App() {
   if (!data) return <div className="aries-loading">ARIES — waking up…</div>;
 
   return (
-    <div
-      className="aries-app"
-      ref={appRef}
-      onPointerMove={onVeilMove}
-      onPointerLeave={() => setPointer(null)}
-      onPointerDown={onVeilDown}
-    >
+    <div className="aries-app">
       <div className="aries-veil">
-        <img className="veil-img veil-colour" src={NEBULA_SRC} alt="" aria-hidden="true" />
-        <img
-          className="veil-img veil-top"
-          src={veilSrc}
-          alt=""
-          aria-hidden="true"
-          style={{ maskImage: veilMask, WebkitMaskImage: veilMask }}
+        <DitherVeil
+          pattern="floyd"
+          pixelSize={grain === "fine" ? 2 : 4}
+          inkColor="#120f17"
+          paperColor="#f4f1ea"
+          revealRadius={200}
+          softness={0.6}
+          linger={1}
+          rim={0.15}
+          rimColor="#d9a441"
+          fit="cover"
         />
-        {pointer && (
-          <div
-            className="veil-rim"
-            style={{
-              left: pointer.x,
-              top: pointer.y,
-              width: revealRadius * 2,
-              height: revealRadius * 2,
-            }}
-          />
-        )}
       </div>
       <button
         className="veil-toggle"
@@ -789,3 +758,4 @@ function SetupWizard({ onDone, onSkip }) {
     </div>
   );
 }
+
