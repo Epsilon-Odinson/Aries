@@ -68,6 +68,68 @@ def get_api_key() -> str:
     )
 
 
+def set_api_key(key: str) -> None:
+    """Save the NVIDIA API key to the OS credential store (keyring).
+
+    This is what the Settings field in the desktop app writes to —
+    the same entry :func:`get_api_key` reads (service ``"Aries"``,
+    username ``"nvidia_api_key"``). The key is never printed or
+    logged. Raises ValueError for an empty key, RuntimeError when
+    keyring is not available.
+    """
+    key = (key or "").strip()
+    if not key:
+        raise ValueError("The API key is empty — paste a key first.")
+    try:
+        import keyring
+    except ImportError as exc:
+        raise RuntimeError(
+            "keyring is not installed, so the key cannot be saved. "
+            "Install it with: pip install -r requirements.txt"
+        ) from exc
+    try:
+        keyring.set_password(KEYRING_SERVICE, KEYRING_USERNAME, key)
+    except Exception as exc:
+        raise RuntimeError(
+            "Could not save the key to the OS credential store: "
+            f"{exc}"
+        ) from exc
+
+
+def delete_api_key() -> bool:
+    """Remove the key saved in the OS credential store.
+
+    Returns True when a saved key was removed, False when there was
+    none (or keyring is missing). A key set as the NVIDIA_API_KEY
+    environment variable is not touched — that one lives outside
+    the app, and it still wins over keyring while it is set.
+    """
+    try:
+        import keyring
+    except ImportError:
+        return False
+    try:
+        keyring.delete_password(KEYRING_SERVICE, KEYRING_USERNAME)
+    except Exception:
+        return False
+    return True
+
+
+def key_source() -> str | None:
+    """Where the current key comes from, without revealing it.
+
+    Returns "environment variable" when NVIDIA_API_KEY is set,
+    "saved in the OS credential store" when keyring holds one,
+    or None when no key is available. Used by the Settings screen
+    so the user can see the key status without ever seeing the key.
+    """
+    if os.getenv("NVIDIA_API_KEY"):
+        return "environment variable"
+    if _key_from_keyring():
+        return "saved in the OS credential store"
+    return None
+
+
 def has_api_key() -> bool:
     """True if a key is available, without revealing it."""
     try:

@@ -1,0 +1,527 @@
+"""PC control for Aries — desktop only.
+
+An operating agent: the desktop app can open apps and files, type,
+move/click/scroll the mouse, use the clipboard, run shell commands,
+read/write files and report system info. This is the defined command
+set from the fixed build spec — nothing else.
+
+Rules (fixed spec, autonomy section):
+- Max 5 agent steps per command (:data:`MAX_STEPS`).
+- Confirmation BEFORE any action runs. The UI shows the plan and
+  asks; nothing here runs on its own.
+- Destructive actions (shutdown, restart, delete) need EXPLICIT
+  confirmation — the UI asks a second time, with a warning.
+- Desktop software only. This module is never used by the webapp.
+
+How it works: the LLM answers with a fenced ````pc-actions`` block
+holding a JSON list of steps. :func:`extract_pc_actions` pulls it
+out, :func:`describe_action` turns each step into one plain line
+for the confirmation dialog, and :func:`execute_steps` runs the
+plan after the user says yes.
+
+Heavy imports (pyautogui, psutil, pyperclip) are loaded lazily
+inside the functions that need them, so importing this module
+never needs a display, a mouse, or those packages installed —
+``python -m py_compile`` and the text-only CLI work anywhere.
+On Windows (the only supported target for the .exe) they are in
+requirements.txt.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+MAX_STEPS = 5
+
+# Largest file read in one step (200 KB) and largest text typed in
+# one step (2000 chars) — caps a runaway action before it starts.
+MAX_READ_BYTES = 200_000
+MAX_TYPE_CHARS = 2_000
+SHELL_TIMEOUT = 30  # seconds per shell command
+
+ACTIONS = {
+    "open_app",
+    "open_path",
+    "type_text",
+    "mouse_move",
+    "mouse_click",
+    "mouse_scroll",
+    "clipboard_copy",
+    "clipboard_paste",
+    "shell",
+    "read_file",
+    "write_file",
+    "system_info",
+}
+
+# Required fields per action (besides "action" itself).
+_REQUIRED = {
+    "open_app": ("name",),
+    "open_path": ("path",),
+    "type_text": ("text",),
+    "mouse_move": ("x", "y"),
+    "mouse_click": ("x", "y"),
+    "mouse_scroll": ("amount",),
+    "clipboard_copy": ("text",),
+    "clipboard_paste": (),
+    "shell": ("command",),
+    "read_file": ("path",),
+    "write_file": ("path", "text"),
+    "system_info": (),
+}
+
+# Shell text that means "destroy something". Matched case-insensitively
+# against shell commands; a match marks the step destructive, which
+# makes the UI ask a second time before running it.
+_DESTRUCTIVE_SHELL = (
+    r"\bshutdown\b",
+    r"\brestart-computer\b",
+    r"\brestart\b.*\b/computer\b",
+    r"\bformat\b",
+    r"\bdel\b\s+",
+    r"\berase\b\s+",
+    r"\brmdir\b\s+/s",
+    r"\brd\b\s+/s",
+    r"\bremove-item\b.*-recurse\b",
+    r"\brm\b\s+-[a-z]*r[a-z]*\b",
+    r"\brm\b\s+--recursive\b",
+    r"\breg\s+delete\b",
+    r"\bdiskpart\b",
+)
+
+
+class PcControlError(RuntimeError):
+    """A clear, user-facing error from a PC control step."""
+
+
+# --- lazy heavy imports -------------------------------------------------------
+
+
+def _pyautogui():
+    """pyautogui, or a plain-words error if it is missing/unusable."""
+    try:
+        import pyautogui
+    except Exception as exc:
+        raise PcControlError(
+            "Mouse/keyboard control needs pyautogui, which is not "
+            f"available here ({exc}). Install it with: "
+            "pip install -r requirements.txt"
+        ) from exc
+    return pyautogui
+
+
+def _psutil():
+    try:
+        import psutil
+    except Exception as exc:
+        raise PcControlError(
+            "System info needs psutil, which is not available here "
+            f"({exc}). Install it with: pip install -r requirements.txt"
+        ) from exc
+    return psutil
+
+
+def _pyperclip():
+    try:
+        import pyperclip
+    except Exception as exc:
+        raise PcControlError(
+            "Clipboard access needs pyperclip, which is not available "
+            f"here ({exc}). Install it with: pip install -r requirements.txt"
+        ) from exc
+    return pyperclip
+
+
+# --- parsing the model's action block ------------------------------------------
+
+
+def extract_pc_actions(reply: str) -> list[dict] | None:
+    """Pull a ````pc-actions`` JSON block out of a model reply.
+
+    Returns the list of steps, or None when the reply holds no such
+    block. Raises :class:`PcControlError` when the block is present
+    but is not valid JSON / not a list — the UI shows that as an
+    error instead of running anything.
+    """
+    match = re.search(
+        r"```pc-actions\s*\n(.*?)```", reply, re.DOTALL | re.IGNORECASE
+    )
+    if not match:
+        return None
+    try:
+        steps = json.loads(match.group(1))
+    except json.JSONDecodeError as exc:
+        raise PcControlError(
+            f"I tried to plan PC actions but the plan was not valid JSON: {exc}"
+        ) from exc
+    if not isinstance(steps, list):
+        raise PcControlError(
+            "The PC action plan must be a JSON list of steps, not a single object."
+        )
+    return steps
+
+
+def strip_pc_actions_block(reply: str) -> str:
+    """Remove the ````pc-actions`` block so the chat shows plain words."""
+    text = re.sub(
+        r"```pc-actions\s*\n.*?```", "", reply,
+        flags=re.DOTALL | re.IGNORECASE,
+    )
+    return re.sub(r"\n{3,}", "\n\n", text).strip()
+
+
+# --- describing and checking a plan ----------------------------------------------
+
+
+def describe_action(step: dict) -> str:
+    """One plain line describing a step, for the confirmation dialog."""
+    action = str(step.get("action", ""))
+    if action == "open_app":
+        return f"Open the app “{step.get('name', '')}”"
+    if action == "open_path":
+        return f"Open “{step.get('path', '')}”"
+    if action == "type_text":
+        text = str(step.get("text", ""))
+        shown = text if len(text) <= 60 else text[:57] + "…"
+        return f"Type: “{shown}”"
+    if action == "mouse_move":
+        return f"Move the mouse to ({step.get('x')}, {step.get('y')})"
+    if action == "mouse_click":
+        button = step.get("button", "left")
+        return f"Click ({step.get('x')}, {step.get('y')}) with the {button} mouse button"
+    if action == "mouse_scroll":
+        amount = step.get("amount", 0)
+        direction = "up" if int(amount) > 0 else "down"
+        return f"Scroll {direction} ({amount})"
+    if action == "clipboard_copy":
+        text = str(step.get("text", ""))
+        shown = text if len(text) <= 60 else text[:57] + "…"
+        return f"Copy to the clipboard: “{shown}”"
+    if action == "clipboard_paste":
+        return "Read the clipboard"
+    if action == "shell":
+        return f"Run the command: {step.get('command', '')}"
+    if action == "read_file":
+        return f"Read the file “{step.get('path', '')}”"
+    if action == "write_file":
+        return f"Write to the file “{step.get('path', '')}”"
+    if action == "system_info":
+        return "Check the PC's system info (CPU, memory, disk, battery)"
+    return f"Unknown action: {action}"
+
+
+def is_destructive(step: dict) -> bool:
+    """True when a step destroys something and needs a second ask.
+
+    Destructive means: shut the PC down, restart it, delete files,
+    or overwrite a file that already exists. Everything else is
+    reversible enough for the single confirmation.
+    """
+    action = str(step.get("action", ""))
+    if action == "shell":
+        command = str(step.get("command", ""))
+        lowered = command.lower()
+        # A bare "shutdown" / "restart" anywhere is destructive; the
+        # patterns above catch the command forms Windows and
+        # PowerShell actually use.
+        return any(re.search(p, lowered) for p in _DESTRUCTIVE_SHELL)
+    if action == "write_file":
+        # Overwriting an existing file destroys its old contents.
+        path = str(step.get("path", ""))
+        try:
+            return bool(path) and Path(path).expanduser().exists()
+        except OSError:
+            return True  # unknown path — treat as destructive, ask twice
+    return False
+
+
+def validate_steps(steps: list[dict]) -> None:
+    """Check a plan before anything runs. Raises PcControlError."""
+    if not isinstance(steps, list) or not steps:
+        raise PcControlError("The PC action plan is empty.")
+    if len(steps) > MAX_STEPS:
+        raise PcControlError(
+            f"That plan has {len(steps)} steps — the limit is {MAX_STEPS} "
+            "per command. Ask me to split it into smaller pieces."
+        )
+    for i, step in enumerate(steps, 1):
+        if not isinstance(step, dict):
+            raise PcControlError(f"Step {i} is not an action (it must be an object).")
+        action = step.get("action")
+        if action not in ACTIONS:
+            raise PcControlError(
+                f"Step {i} asks for an unknown action: {action!r}. "
+                f"Known actions: {', '.join(sorted(ACTIONS))}."
+            )
+        for field in _REQUIRED[action]:
+            if field not in step or step[field] in (None, ""):
+                raise PcControlError(
+                    f"Step {i} ({action}) is missing its “{field}”."
+                )
+
+
+# --- running one step ----------------------------------------------------------
+
+
+def _run_open_app(step: dict) -> str:
+    name = str(step["name"]).strip()
+    if not name:
+        raise PcControlError("The app name is empty.")
+    if os.name != "nt":
+        raise PcControlError(
+            "Opening apps by name works on Windows only — "
+            "this PC control build targets the Windows .exe."
+        )
+    # `start` resolves registered app names (notepad, calc, chrome…)
+    # and .exe paths. An empty title argument keeps `start` from
+    # treating a quoted name as the window title.
+    try:
+        subprocess.Popen(
+            ["cmd", "/c", "start", "", name],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except OSError as exc:
+        raise PcControlError(f"Could not open “{name}”: {exc}") from exc
+    return f"Opened “{name}”."
+
+
+def _run_open_path(step: dict) -> str:
+    path = str(step["path"]).strip()
+    if not path:
+        raise PcControlError("The path is empty.")
+    target = Path(path).expanduser()
+    if not target.exists():
+        raise PcControlError(f"That does not exist: {path}")
+    if os.name == "nt":
+        os.startfile(str(target))  # noqa: S606 - user-confirmed path
+    elif sys.platform == "darwin":
+        subprocess.Popen(["open", str(target)])
+    else:
+        subprocess.Popen(["xdg-open", str(target)])
+    return f"Opened “{path}”."
+
+
+def _run_type_text(step: dict) -> str:
+    text = str(step["text"])
+    if len(text) > MAX_TYPE_CHARS:
+        raise PcControlError(
+            f"That text is {len(text)} characters — the limit per step "
+            f"is {MAX_TYPE_CHARS}."
+        )
+    gui = _pyautogui()
+    gui.write(text, interval=0.02)
+    return f"Typed {len(text)} characters."
+
+
+def _run_mouse_move(step: dict) -> str:
+    gui = _pyautogui()
+    gui.moveTo(int(step["x"]), int(step["y"]), duration=0.25)
+    return f"Moved the mouse to ({step['x']}, {step['y']})."
+
+
+def _run_mouse_click(step: dict) -> str:
+    gui = _pyautogui()
+    button = str(step.get("button", "left")).lower()
+    if button not in ("left", "right", "middle"):
+        raise PcControlError(f"Unknown mouse button: {button!r}.")
+    gui.click(int(step["x"]), int(step["y"]), button=button)
+    return f"Clicked ({step['x']}, {step['y']}) with the {button} button."
+
+
+def _run_mouse_scroll(step: dict) -> str:
+    gui = _pyautogui()
+    gui.scroll(int(step["amount"]))
+    return f"Scrolled by {step['amount']}."
+
+
+def _run_clipboard_copy(step: dict) -> str:
+    clip = _pyperclip()
+    try:
+        clip.copy(str(step["text"]))
+    except Exception as exc:
+        raise PcControlError(f"Could not copy to the clipboard: {exc}") from exc
+    return "Copied to the clipboard."
+
+
+def _run_clipboard_paste(step: dict) -> str:
+    clip = _pyperclip()
+    try:
+        text = clip.paste()
+    except Exception as exc:
+        raise PcControlError(f"Could not read the clipboard: {exc}") from exc
+    if not text:
+        return "The clipboard is empty."
+    shown = text if len(text) <= 500 else text[:497] + "…"
+    return f"Clipboard holds: “{shown}”"
+
+
+def _run_shell(step: dict) -> str:
+    command = str(step["command"]).strip()
+    if not command:
+        raise PcControlError("The shell command is empty.")
+    try:
+        proc = subprocess.run(
+            command,
+            shell=True,
+            capture_output=True,
+            text=True,
+            timeout=SHELL_TIMEOUT,
+        )
+    except subprocess.TimeoutExpired:
+        raise PcControlError(
+            f"The command ran longer than {SHELL_TIMEOUT} seconds, so I stopped it."
+        ) from None
+    out = (proc.stdout or "").strip()
+    err = (proc.stderr or "").strip()
+    detail = out or err or "(no output)"
+    if len(detail) > 1000:
+        detail = detail[:997] + "…"
+    if proc.returncode != 0:
+        raise PcControlError(
+            f"Command exited with code {proc.returncode}: {detail}"
+        )
+    return f"Command ran (exit 0): {detail}"
+
+
+def _run_read_file(step: dict) -> str:
+    path = Path(str(step["path"])).expanduser()
+    if not path.exists():
+        raise PcControlError(f"That file does not exist: {step['path']}")
+    if not path.is_file():
+        raise PcControlError(f"That is not a file: {step['path']}")
+    if path.stat().st_size > MAX_READ_BYTES:
+        raise PcControlError(
+            f"That file is bigger than {MAX_READ_BYTES // 1000} KB — "
+            "too big to read in one step."
+        )
+    text = path.read_text(encoding="utf-8", errors="replace")
+    shown = text if len(text) <= 2000 else text[:1997] + "…"
+    return f"Read “{path}” ({len(text)} characters):\n{shown}"
+
+
+def _run_write_file(step: dict) -> str:
+    path = Path(str(step["path"])).expanduser()
+    text = str(step["text"])
+    try:
+        if path.parent and not path.parent.exists():
+            path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+    except OSError as exc:
+        raise PcControlError(f"Could not write “{path}”: {exc}") from exc
+    return f"Wrote {len(text)} characters to “{path}”."
+
+
+def _run_system_info(step: dict) -> str:
+    psutil = _psutil()
+    cpu = psutil.cpu_percent(interval=0.5)
+    mem = psutil.virtual_memory()
+    disk = psutil.disk_usage("/")
+    parts = [
+        f"CPU {cpu:.0f}%",
+        f"memory {mem.percent:.0f}% used "
+        f"({mem.used // (1024 ** 2)} of {mem.total // (1024 ** 2)} MB)",
+        f"disk {disk.percent:.0f}% used "
+        f"({disk.used // (1024 ** 3)} of {disk.total // (1024 ** 3)} GB free "
+        f"{disk.free // (1024 ** 3)} GB)",
+    ]
+    try:
+        battery = psutil.sensors_battery()
+    except Exception:
+        battery = None
+    if battery is not None:
+        state = "charging" if battery.power_plugged else "on battery"
+        parts.append(f"battery {battery.percent:.0f}% ({state})")
+    return "System info: " + "; ".join(parts) + "."
+
+
+_RUNNERS = {
+    "open_app": _run_open_app,
+    "open_path": _run_open_path,
+    "type_text": _run_type_text,
+    "mouse_move": _run_mouse_move,
+    "mouse_click": _run_mouse_click,
+    "mouse_scroll": _run_mouse_scroll,
+    "clipboard_copy": _run_clipboard_copy,
+    "clipboard_paste": _run_clipboard_paste,
+    "shell": _run_shell,
+    "read_file": _run_read_file,
+    "write_file": _run_write_file,
+    "system_info": _run_system_info,
+}
+
+
+# --- running a plan ------------------------------------------------------------
+
+
+def execute_step(step: dict) -> dict:
+    """Run one validated step. Returns {"ok", "summary", "detail"}."""
+    action = str(step.get("action", ""))
+    try:
+        summary = _RUNNERS[action](step)
+        return {"ok": True, "summary": summary, "detail": summary}
+    except PcControlError as exc:
+        return {"ok": False, "summary": str(exc), "detail": str(exc)}
+    except Exception as exc:  # never let a step crash the app
+        message = f"{action} failed: {exc}"
+        return {"ok": False, "summary": message, "detail": message}
+
+
+def execute_steps(steps: list[dict]) -> list[dict]:
+    """Validate a plan, then run it step by step.
+
+    Stops at the first failed step and returns the results so far
+    (each ``{"ok", "summary", "detail"}``). The caller reports them
+    to the user and to the model.
+    """
+    validate_steps(steps)
+    results: list[dict] = []
+    for step in steps:
+        result = execute_step(step)
+        results.append(result)
+        if not result["ok"]:
+            break
+    return results
+
+
+# --- what the model is told -----------------------------------------------------
+
+
+PC_CONTROL_INSTRUCTIONS = """\
+You can also act on this PC — open apps and files, type, click,
+use the clipboard, run commands, read/write files, check system
+info. This is a desktop app on Windows, so PC actions are real.
+
+When the user asks you to DO something on the PC (not just answer),
+reply with a short sentence saying what you will do, then a fenced
+block with the plan as a JSON list — at most 5 steps. The app shows
+the plan to the user and asks before anything runs, so never claim
+an action already happened.
+
+```pc-actions
+[{"action": "open_app", "name": "notepad"}]
+```
+
+Actions and their fields:
+- open_app: {"action": "open_app", "name": "notepad"} — app name or .exe
+- open_path: {"action": "open_path", "path": "C:\\Users\\Epsilon\\file.txt"} — file or folder
+- type_text: {"action": "type_text", "text": "hello"} — types into the focused window
+- mouse_move: {"action": "mouse_move", "x": 500, "y": 300}
+- mouse_click: {"action": "mouse_click", "x": 500, "y": 300, "button": "left"}
+- mouse_scroll: {"action": "mouse_scroll", "amount": 3} — positive scrolls up
+- clipboard_copy: {"action": "clipboard_copy", "text": "…"}
+- clipboard_paste: {"action": "clipboard_paste"} — reads the clipboard
+- shell: {"action": "shell", "command": "dir"} — one Windows command, 30 s limit
+- read_file: {"action": "read_file", "path": "…"} — text files up to 200 KB
+- write_file: {"action": "write_file", "path": "…", "text": "…"}
+- system_info: {"action": "system_info"} — CPU, memory, disk, battery
+
+Rules: at most 5 steps in one plan. Do NOT plan shutdown, restart,
+or deleting files unless the user explicitly asked for that — those
+need a second confirmation. If the user only asks a question, just
+answer it; do not add a pc-actions block."""

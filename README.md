@@ -172,6 +172,40 @@ built one module at a time.
   chat, input, buttons and status all use Segoe UI, falling
   back to Arial / sans-serif if Segoe UI is missing.
 
+## What changed in 0.4.0 — PC control, API-key Settings, Windows .exe
+
+- **PC control** (`aries/pc_control.py`, desktop only): ask Aries
+  to do things on the PC — open apps by name, open files/folders,
+  type text, move/click/scroll the mouse, copy/read the clipboard,
+  run shell commands, read/write files, check system info
+  (CPU, memory, disk, battery). The defined command set from the
+  fixed spec, nothing else. **Max 5 steps per command.** Aries
+  plans the steps, the app shows the plan in plain words and
+  asks before anything runs; **destructive actions (shutdown,
+  restart, delete, overwriting a file) ask a second time, with
+  a warning.** The master toggle is in Settings ("Allow PC
+  control") and is **OFF by default**. The webapp never gets this.
+- **API key in Settings** (gear icon, top right): paste the
+  NVIDIA API key and press "Save key" — it goes to the OS
+  credential store (Windows Credential Manager) via keyring, the
+  same entry the app already reads. The .exe then works
+  standalone, no environment variable needed. The key is never
+  shown back, printed, or logged. If `NVIDIA_API_KEY` is set as
+  an environment variable, that one still wins (Settings says so).
+- **Windows .exe** (`.github/workflows/build-windows.yml`):
+  push a tag like `v0.4.0-desktop` (or run it by hand from the
+  Actions tab) and GitHub Actions builds a single-file
+  `Aries.exe` with PyInstaller and publishes it as a GitHub
+  Release asset. Download it from the Releases page and run it
+  — no install needed.
+
+## Download the Windows .exe
+
+Every `v*-desktop` tag publishes a Release with `Aries.exe`
+attached: open the repo's **Releases** page and download the
+latest one. Run it — no install needed. On first run, open
+Settings (gear icon, top right) and paste your NVIDIA API key.
+
 Still to come: voice (Module 3), face-recognition login (Module 4),
 permissions system (Module 5), full mini mode (Module 6).
 
@@ -249,11 +283,17 @@ steps in the chat pane. Set the key (see above), then press
 ```
 aries/
   __init__.py    Package marker, version
-  config.py      API key loading (env, then keyring), never prints the key
+  config.py      API key loading (env, then keyring) and saving,
+                 never prints the key
   llm.py         NVIDIA chat client, clear errors on 401 / 429 / 410
   main.py        Entry point: UI by default, --cli for the text loop
+  pc_control.py  PC control (desktop only): defined command set,
+                 max 5 steps, confirmation before acting
   ui.py          PyQt5 window: JARVIS HUD background, animated
-                 robot face, chat pane, worker thread, mini-mode stub
+                 robot face, chat pane, worker thread, mini-mode stub,
+                 Settings dialog (API key + PC control toggle)
+run_aries.py     Entry point for the PyInstaller .exe build
+.github/workflows/build-windows.yml   Windows .exe build + Release
 requirements.txt
 README.md
 .gitignore       Secrets, virtual envs, face/voice data, build output

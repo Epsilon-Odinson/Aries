@@ -4,3 +4,7 @@ PyQt5==5.15.11
 requests==2.32.3
 python-dotenv==1.0.1
 keyring>=24.3,<26
+# PC control (Module: operating agent, desktop only)
+pyautogui==0.9.54
+psutil>=6.1,<8
+pyperclip==1.9.0

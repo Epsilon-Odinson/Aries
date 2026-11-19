@@ -40,21 +40,34 @@ from __future__ import annotations
 import math
 import random
 
-from PyQt5.QtCore import QEvent, QObject, Qt, QThread, QTimer, pyqtSignal
+from PyQt5.QtCore import (
+    QEvent,
+    QObject,
+    QSettings,
+    Qt,
+    QThread,
+    QTimer,
+    pyqtSignal,
+)
 from PyQt5.QtGui import QColor, QFont, QPainter, QPen
 from PyQt5.QtWidgets import (
     QApplication,
+    QCheckBox,
+    QDialog,
+    QFormLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QMainWindow,
+    QMessageBox,
     QPushButton,
     QTextEdit,
     QVBoxLayout,
     QWidget,
 )
 
-from .config import get_api_key
+from . import pc_control
+from .config import delete_api_key, get_api_key, key_source, set_api_key
 from .llm import AriesLLMError, chat
 from .main import SYSTEM_PROMPT
 
@@ -780,6 +793,184 @@ class MiniWindow(QWidget):
         super().closeEvent(event)
 
 
+# --- Settings ---------------------------------------------------------------
+class SettingsDialog(QDialog):
+    """Settings: NVIDIA API key + the PC control master toggle.
+
+    API key — the field saves to the OS credential store via keyring
+    (service "Aries", username "nvidia_api_key"), the same entry
+    ``config.get_api_key()`` reads. The key is never shown back: the
+    field is password-masked, it is cleared after saving, and the
+    status line only says *where* a key comes from. With a saved
+    key the .exe works standalone — no environment variable needed.
+    (If NVIDIA_API_KEY is set as an environment variable, that one
+    still wins; the status line says so.)
+
+    PC control — the master toggle for ``aries.pc_control``: OFF by
+    default, saved per user with QSettings (Windows: the registry).
+    Even when it is on, every plan still asks for confirmation
+    first, and destructive actions ask a second time.
+    """
+
+    settings_changed = pyqtSignal()
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Aries — Settings")
+        self.setMinimumWidth(480)
+        self.setStyleSheet(
+            f"background: {BG}; color: {TEXT}; font-family: {SANS};"
+        )
+        self._settings = QSettings("Aries", "AriesDesktop")
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(24, 20, 24, 20)
+        layout.setSpacing(12)
+
+        # ---- NVIDIA API key --------------------------------------------
+        key_title = QLabel("NVIDIA API key", self)
+        key_title.setStyleSheet(
+            f"font-family: {SANS_SEMI}; font-size: 15px; font-weight: bold;"
+        )
+        layout.addWidget(key_title)
+        key_note = QLabel(
+            "Saved in the OS credential store (Windows Credential "
+            "Manager) — the .exe then works on its own, no environment "
+            "variable needed. If NVIDIA_API_KEY is set as an environment "
+            "variable, that one wins instead. The key is never shown "
+            "here, printed, or logged.",
+            self,
+        )
+        key_note.setWordWrap(True)
+        key_note.setStyleSheet(f"color: {MUTED}; font-size: 12px;")
+        layout.addWidget(key_note)
+        self._key_status = QLabel(self)
+        self._key_status.setStyleSheet(f"color: {MUTED}; font-size: 12px;")
+        layout.addWidget(self._key_status)
+
+        key_row = QHBoxLayout()
+        key_row.setSpacing(10)
+        self._key_input = QLineEdit(self)
+        self._key_input.setEchoMode(QLineEdit.Password)
+        self._key_input.setPlaceholderText("Paste your NVIDIA API key here")
+        self._key_input.setMinimumHeight(44)
+        self._key_input.setStyleSheet(
+            f"background: {PANEL_SEMI}; color: {TEXT}; "
+            f"padding: 8px 16px; border: 1px solid {ACCENT_SOFT}; "
+            "border-radius: 22px;"
+        )
+        key_row.addWidget(self._key_input, stretch=1)
+        save_btn = QPushButton("Save key", self)
+        save_btn.setMinimumHeight(44)
+        save_btn.setStyleSheet(
+            f"background: {ACCENT}; color: white; padding: 8px 20px;"
+            f"border: none; border-radius: 22px; font-weight: bold;"
+            f"font-family: {SANS_SEMI};"
+        )
+        save_btn.clicked.connect(self._on_save_key)
+        key_row.addWidget(save_btn)
+        layout.addLayout(key_row)
+
+        self._key_message = QLabel(self)
+        self._key_message.setWordWrap(True)
+        self._key_message.setStyleSheet(f"color: {ACCENT_SOFT}; font-size: 12px;")
+        layout.addWidget(self._key_message)
+
+        clear_btn = QPushButton("Remove the saved key", self)
+        clear_btn.setStyleSheet(
+            f"background: transparent; color: {MUTED}; padding: 6px 12px;"
+            f"border: 1px solid {ACCENT_SOFT}; border-radius: 16px;"
+        )
+        clear_btn.clicked.connect(self._on_clear_key)
+        layout.addWidget(clear_btn, alignment=Qt.AlignLeft)
+
+        # ---- PC control ---------------------------------------------------
+        pc_title = QLabel("PC control", self)
+        pc_title.setStyleSheet(
+            f"font-family: {SANS_SEMI}; font-size: 15px; font-weight: bold;"
+        )
+        layout.addWidget(pc_title)
+        self._pc_check = QCheckBox("Allow PC control", self)
+        self._pc_check.setStyleSheet(f"font-size: 14px;")
+        self._pc_check.setChecked(bool(
+            self._settings.value("pc_control_enabled", False, type=bool)
+        ))
+        self._pc_check.toggled.connect(self._on_pc_toggle)
+        layout.addWidget(self._pc_check)
+        pc_note = QLabel(
+            "When this is on, Aries can open apps and files, type, "
+            "click, use the clipboard, run commands, read/write files "
+            "and check system info on this PC — but ONLY after you "
+            "confirm each plan in a pop-up. Destructive actions "
+            "(shutdown, restart, delete, overwriting a file) always "
+            "ask a second time. Off by default. Desktop only — the "
+            "webapp never gets this.",
+            self,
+        )
+        pc_note.setWordWrap(True)
+        pc_note.setStyleSheet(f"color: {MUTED}; font-size: 12px;")
+        layout.addWidget(pc_note)
+
+        layout.addStretch(1)
+        done_btn = QPushButton("Done", self)
+        done_btn.setMinimumHeight(44)
+        done_btn.setStyleSheet(
+            f"background: {ACCENT}; color: white; padding: 8px 24px;"
+            f"border: none; border-radius: 22px; font-weight: bold;"
+            f"font-family: {SANS_SEMI}; font-size: 14px;"
+        )
+        done_btn.clicked.connect(self.accept)
+        layout.addWidget(done_btn, alignment=Qt.AlignRight)
+        self._refresh_key_status()
+
+    def _refresh_key_status(self) -> None:
+        source = key_source()
+        if source == "environment variable":
+            text = ("Key status: set (from the NVIDIA_API_KEY environment "
+                    "variable — that one wins over a saved key).")
+        elif source == "saved in the OS credential store":
+            text = ("Key status: set (saved in the OS credential store).")
+        else:
+            text = "Key status: not set."
+        self._key_status.setText(text)
+
+    def _on_save_key(self) -> None:
+        try:
+            set_api_key(self._key_input.text())
+        except (ValueError, RuntimeError) as exc:
+            self._key_message.setStyleSheet(
+                f"color: {ERROR_RED}; font-size: 12px;"
+            )
+            self._key_message.setText(str(exc))
+            return
+        self._key_input.clear()
+        self._key_message.setStyleSheet(
+            f"color: {ACCENT_SOFT}; font-size: 12px;"
+        )
+        self._key_message.setText(
+            "Saved to the OS credential store. The key itself is never shown."
+        )
+        self._refresh_key_status()
+        self.settings_changed.emit()
+
+    def _on_clear_key(self) -> None:
+        if delete_api_key():
+            self._key_message.setStyleSheet(
+                f"color: {ACCENT_SOFT}; font-size: 12px;"
+            )
+            self._key_message.setText("Saved key removed.")
+        else:
+            self._key_message.setStyleSheet(
+                f"color: {MUTED}; font-size: 12px;"
+            )
+            self._key_message.setText("There was no saved key to remove.")
+        self._refresh_key_status()
+        self.settings_changed.emit()
+
+    def _on_pc_toggle(self, checked: bool) -> None:
+        self._settings.setValue("pc_control_enabled", bool(checked))
+        self.settings_changed.emit()
+
+
 # --- Main window ---------------------------------------------------------------
 class AriesWindow(QMainWindow):
     """Main Aries window (0.3.2): the face is the hero.
@@ -806,8 +997,19 @@ class AriesWindow(QMainWindow):
         self._worker: ChatWorker | None = None
         self._mini: MiniWindow | None = None
         self._key_ok = True
+        # PC control (desktop only): master toggle from Settings,
+        # OFF by default. _pc_round_used allows one action plan per
+        # user message; _pc_followup_pending marks the summary reply
+        # that follows a plan, so it is never treated as a new plan.
+        self._settings = QSettings("Aries", "AriesDesktop")
+        self._pc_control_enabled = bool(
+            self._settings.value("pc_control_enabled", False, type=bool)
+        )
+        self._pc_round_used = False
+        self._pc_followup_pending = False
         self._build_ui()
         self._check_key()
+        self._refresh_system_prompt()
 
     # -- layout ------------------------------------------------------------
     def _build_ui(self) -> None:
@@ -827,9 +1029,18 @@ class AriesWindow(QMainWindow):
         root.setContentsMargins(28, 16, 28, 28)
         root.setSpacing(12)
 
-        # Tiny fullscreen toggle, top-right, out of the way.
+        # Tiny Settings + fullscreen toggles, top-right, out of the way.
         top = QHBoxLayout()
         top.addStretch(1)
+        self._settings_btn = QPushButton("⚙  Settings", self)
+        self._settings_btn.setObjectName("settings_btn")
+        self._settings_btn.clicked.connect(self._open_settings)
+        self._settings_btn.setStyleSheet(
+            f"background: transparent; color: {MUTED}; "
+            f"padding: 6px 14px; font-family: {SANS}; font-size: 12px;"
+            f"border: 1px solid {ACCENT_SOFT}; border-radius: 16px;"
+        )
+        top.addWidget(self._settings_btn)
         self._fs_btn = QPushButton("⛶  Fullscreen  (F11)", self)
         self._fs_btn.setObjectName("fullscreen_btn")
         self._fs_btn.clicked.connect(self._toggle_fullscreen)
@@ -978,6 +1189,27 @@ class AriesWindow(QMainWindow):
         self._retry_btn.hide()
         self._set_status("Ready")
 
+    # -- settings ------------------------------------------------------------
+    def _open_settings(self) -> None:
+        dialog = SettingsDialog(self)
+        dialog.settings_changed.connect(self._on_settings_changed)
+        dialog.exec_()
+
+    def _on_settings_changed(self) -> None:
+        """A setting changed (key saved/cleared, PC toggle flipped)."""
+        self._pc_control_enabled = bool(
+            self._settings.value("pc_control_enabled", False, type=bool)
+        )
+        self._refresh_system_prompt()
+        self._check_key()
+
+    def _refresh_system_prompt(self) -> None:
+        """System prompt, plus the PC control rules when it is on."""
+        prompt = SYSTEM_PROMPT
+        if self._pc_control_enabled:
+            prompt += "\n\n" + pc_control.PC_CONTROL_INSTRUCTIONS
+        self._history[0] = {"role": "system", "content": prompt}
+
     # -- chat ------------------------------------------------------------------
     def _append(self, who: str, text: str) -> None:
         color = ACCENT_SOFT if who == "Aries" else TEXT
@@ -999,19 +1231,8 @@ class AriesWindow(QMainWindow):
         if self._mini is not None:
             self._mini.set_state(state)
 
-    def _on_send(self) -> None:
-        if not self._key_ok:
-            return
-        text = self._input.text().strip()
-        if not text:
-            return
-        self._input.clear()
-        self._append("You", text)
-        self._history.append({"role": "user", "content": text})
-        self._set_busy(True)
-        self._set_core_state("thinking")
-        self._set_status("Thinking…")
-
+    def _start_chat_worker(self) -> None:
+        """Run llm.chat() for the current history off the UI thread."""
         self._thread = QThread(self)
         self._worker = ChatWorker(self._history)
         self._worker.moveToThread(self._thread)
@@ -1023,9 +1244,23 @@ class AriesWindow(QMainWindow):
         self._thread.finished.connect(self._thread.deleteLater)
         self._thread.start()
 
-    def _on_reply(self, reply: str) -> None:
-        self._history.append({"role": "assistant", "content": reply})
-        self._append("Aries", reply)
+    def _on_send(self) -> None:
+        if not self._key_ok:
+            return
+        text = self._input.text().strip()
+        if not text:
+            return
+        self._input.clear()
+        self._append("You", text)
+        self._history.append({"role": "user", "content": text})
+        self._pc_round_used = False
+        self._set_busy(True)
+        self._set_core_state("thinking")
+        self._set_status("Thinking…")
+        self._start_chat_worker()
+
+    def _finish_reply(self, reply: str) -> None:
+        """Common tail of a reply: speaking state, then back to idle."""
         self._set_core_state("speaking")
         # "Speak" for a bit, scaled to reply length, then back to idle.
         ms = min(4000, max(1200, len(reply) * 12))
@@ -1035,7 +1270,143 @@ class AriesWindow(QMainWindow):
         self._set_busy(False)
         self._set_status("Ready")
 
+    def _on_reply(self, reply: str) -> None:
+        # A follow-up reply after PC actions ran: display it plainly,
+        # never treat it as a new plan.
+        if self._pc_followup_pending:
+            self._pc_followup_pending = False
+            self._history.append({"role": "assistant", "content": reply})
+            self._append("Aries", reply)
+            self._finish_reply(reply)
+            return
+        try:
+            actions = pc_control.extract_pc_actions(reply)
+        except pc_control.PcControlError as exc:
+            self._history.append({"role": "assistant", "content": reply})
+            self._append("Aries", reply)
+            self._append("Aries", f"Sorry — {exc}")
+            self._finish_reply(reply)
+            return
+        display = (
+            pc_control.strip_pc_actions_block(reply) if actions else reply
+        )
+        self._history.append({"role": "assistant", "content": reply})
+        self._append("Aries", display)
+        if not actions:
+            self._finish_reply(reply)
+            return
+        if not self._pc_control_enabled:
+            self._append(
+                "Aries",
+                "That would need PC control, which is off. Turn on "
+                "“Allow PC control” in Settings (gear icon, top right) "
+                "and ask again.",
+            )
+            self._finish_reply(reply)
+            return
+        if self._pc_round_used:
+            self._append(
+                "Aries",
+                "I already ran one PC plan for this message, so I "
+                "stopped there — ask again if you want more done.",
+            )
+            self._finish_reply(reply)
+            return
+        self._pc_round_used = True
+        self._handle_pc_actions(actions)
+
+    def _handle_pc_actions(self, actions: list[dict]) -> None:
+        """Confirm a PC plan, run it, then ask the model to sum up."""
+        try:
+            pc_control.validate_steps(actions)
+        except pc_control.PcControlError as exc:
+            self._append("Aries", f"Sorry — {exc}")
+            self._finish_reply("")
+            return
+        lines = []
+        destructive = False
+        for i, step in enumerate(actions, 1):
+            if pc_control.is_destructive(step):
+                destructive = True
+                lines.append(
+                    f"{i}. {pc_control.describe_action(step)}"
+                    "  ⚠ DESTRUCTIVE"
+                )
+            else:
+                lines.append(f"{i}. {pc_control.describe_action(step)}")
+        plan = "\n".join(lines)
+        self._set_core_state("thinking")
+        self._set_status("Waiting for your OK…")
+        # First confirmation: every plan, every time. Default is No.
+        answer = QMessageBox.question(
+            self,
+            "Aries wants to do this on your PC",
+            "Aries is asking to do these steps on your PC:\n\n"
+            + plan
+            + "\n\nNothing runs until you say yes.",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if answer != QMessageBox.Yes:
+            self._append(
+                "Aries",
+                "OK — I didn't do anything. Nothing on the PC was changed.",
+            )
+            self._history.append(
+                {"role": "user", "content": "No — do not run that plan."}
+            )
+            self._finish_reply("")
+            return
+        if destructive:
+            # Second confirmation, with a warning, for destructive steps.
+            answer2 = QMessageBox.warning(
+                self,
+                "Destructive step — are you sure?",
+                "This plan includes a DESTRUCTIVE step (shutdown, "
+                "restart, delete, or overwriting a file). It cannot be "
+                "undone.\n\n" + plan + "\n\nAre you really sure?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if answer2 != QMessageBox.Yes:
+                self._append(
+                    "Aries",
+                    "OK — I didn't do anything. Nothing on the PC was changed.",
+                )
+                self._history.append(
+                    {"role": "user", "content": "No — do not run that plan."}
+                )
+                self._finish_reply("")
+                return
+        self._set_status("Doing it…")
+        results = pc_control.execute_steps(actions)
+        report_lines = []
+        for step, result in zip(actions, results):
+            tick = "✓" if result["ok"] else "✗"
+            report_lines.append(
+                f"{tick} {pc_control.describe_action(step)}"
+                f" — {result['summary']}"
+            )
+        report = "\n".join(report_lines)
+        self._append("Aries", "Done — here's what happened:\n" + report)
+        # Ask the model to sum the results up in plain words.
+        self._history.append(
+            {
+                "role": "user",
+                "content": (
+                    "PC action results (tell me what happened in plain "
+                    "words, briefly):\n" + report
+                ),
+            }
+        )
+        self._pc_followup_pending = True
+        self._set_busy(True)
+        self._set_core_state("thinking")
+        self._set_status("Thinking…")
+        self._start_chat_worker()
+
     def _on_error(self, message: str) -> None:
+        self._pc_followup_pending = False
         self._append("Aries", f"Sorry — {message}")
         self._set_core_state("error")
         self._set_busy(False)
