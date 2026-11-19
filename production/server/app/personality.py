@@ -1,11 +1,32 @@
 """Personality -> system prompt.
 
 Aries' character is the product; the model is just the engine.
-Voice presets + sliders + free-text notes are combined into one
-system prompt, so Aries stays Aries even if the model changes.
+SOUL.md is the core character definition and MEMORY.md is the durable
+memory about the user — both are read once at module load and folded
+into every system prompt, on top of the voice preset, sliders, profile
+and the day-to-day memories recalled from the database.
 """
 
 from __future__ import annotations
+
+from pathlib import Path
+
+# SOUL.md and MEMORY.md live in the server directory (the directory
+# containing app/). They are copied into the image by the Dockerfile.
+# Read once at module load; fall back to empty if a file is missing —
+# the chat must never crash because a file is absent.
+_SERVER_DIR = Path(__file__).resolve().parent.parent
+
+
+def _read_file(name: str) -> str:
+    try:
+        return (_SERVER_DIR / name).read_text(encoding="utf-8").strip()
+    except Exception:
+        return ""
+
+
+SOUL_TEXT = _read_file("SOUL.md")
+MEMORY_TEXT = _read_file("MEMORY.md")
 
 VOICES = {
     "companion": (
@@ -50,7 +71,10 @@ def build_system_prompt(
     memories: list[str] | None = None,
 ) -> str:
     """Build the system prompt for one chat turn."""
-    parts = [VOICES.get(voice, VOICES["companion"])]
+    parts = []
+    if SOUL_TEXT:
+        parts.append(SOUL_TEXT)
+    parts.append(VOICES.get(voice, VOICES["companion"]))
     values = {"warmth": warmth, "directness": directness, "humour": humour}
     for (key, threshold), line in _TONE_LINES:
         if key in ("warmth", "directness", "humour"):
@@ -66,6 +90,11 @@ def build_system_prompt(
             parts.append(f"The user's name is {name}. Address them by it.")
         if profile.get("about"):
             parts.append(f"About the user: {profile['about']}")
+    if MEMORY_TEXT:
+        parts.append(
+            "Durable facts about the user (from MEMORY.md — curated, trust it):\n"
+            + MEMORY_TEXT
+        )
     if memories:
         parts.append(
             "Things you remember about the user (use them when relevant, "

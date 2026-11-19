@@ -125,7 +125,7 @@ export default function App() {
   const [status, setStatus] = useState("READY");
   const [useSearch, setUseSearch] = useState(false);
   const [showMore, setShowMore] = useState(false);
-  const [moreTab, setMoreTab] = useState("personality");
+  const [moreTab, setMoreTab] = useState("aries");
   const [mini, setMini] = useState(false);
   const [talkBack, setTalkBack] = useState(true);
   const [wakeOn, setWakeOn] = useState(false);
@@ -328,10 +328,6 @@ export default function App() {
   }
   if (!data) return <div className="aries-loading">ARIES — waking up…</div>;
 
-  const hint = mini
-    ? "Mini mode. Press the face again to bring Aries back to full size."
-    : "Move across the veil to lift it — the full colour is underneath. Tap for a burst. Press the face for mini mode.";
-
   return (
     <div className="aries-app">
       <Veil grain={grain} burstSignal={burstSignal} />
@@ -339,6 +335,16 @@ export default function App() {
       <div className="topline">
         <span className="state-label">ARIES</span>
       </div>
+
+      {!locked && (
+        <button
+          className="gear-btn"
+          type="button"
+          onClick={() => { setMoreTab("aries"); setShowMore(true); }}
+          title="Settings"
+          aria-label="Open settings"
+        >⚙</button>
+      )}
 
       {locked ? (
         <LockScreen data={data} onUnlock={() => setLocked(false)} />
@@ -375,15 +381,8 @@ export default function App() {
 
       {!locked && (
         <div className="dock">
-          <p className="hint">{hint}</p>
           {notice && <p className="notice" onClick={() => setNotice("")}>{notice} ✕</p>}
           <div className="composer-row">
-            <button
-              className={`globe ${useSearch ? "on" : ""}`}
-              onClick={() => setUseSearch((v) => !v)}
-              title="Search the web for the next message"
-              aria-pressed={useSearch}
-            >🌐</button>
             <input
               ref={inputRef}
               value={input}
@@ -396,56 +395,6 @@ export default function App() {
               {listening ? "●" : "🎙"}
             </button>
             <button className="send" onClick={() => send()}>Send</button>
-          </div>
-          <div className="controls">
-            <button className="pill" type="button" onClick={() => setBurstSignal((n) => n + 1)}>
-              Release a burst
-            </button>
-            <div className="grain-group" role="group" aria-label="Veil grain">
-              <button className="pill" type="button" aria-pressed={grain === "fine"} onClick={() => setGrain("fine")}>
-                Fine grain
-              </button>
-              <button className="pill" type="button" aria-pressed={grain === "coarse"} onClick={() => setGrain("coarse")}>
-                Coarse grain
-              </button>
-            </div>
-            <button
-              className="pill"
-              type="button"
-              aria-pressed={useSearch}
-              onClick={() => setUseSearch((v) => !v)}
-              title="Search the web for the next message"
-            >
-              Search the web
-            </button>
-            <button
-              className="pill"
-              type="button"
-              aria-pressed={talkBack}
-              onClick={() => setTalkBack((v) => !v)}
-            >
-              Talk back
-            </button>
-            <button
-              className="pill"
-              type="button"
-              aria-pressed={wakeOn}
-              onClick={() => setWakeOn((v) => !v)}
-            >
-              Wake phrase (“Hey Aries”)
-            </button>
-            <button
-              className="pill"
-              type="button"
-              onClick={() => { setMoreTab("personality"); setShowMore(true); }}
-            >
-              Settings / More
-            </button>
-            {mini && (
-              <button className="pill" type="button" onClick={() => setMini(false)}>
-                Expand
-              </button>
-            )}
           </div>
         </div>
       )}
@@ -470,6 +419,15 @@ export default function App() {
           tab={moreTab}
           setTab={setMoreTab}
           onClose={() => { setShowMore(false); load(); }}
+          useSearch={useSearch}
+          setUseSearch={setUseSearch}
+          talkBack={talkBack}
+          setTalkBack={setTalkBack}
+          wakeOn={wakeOn}
+          setWakeOn={setWakeOn}
+          grain={grain}
+          setGrain={setGrain}
+          onBurst={() => setBurstSignal((n) => n + 1)}
         />
       )}
 
@@ -612,7 +570,7 @@ function VoicePicker() {
   );
 }
 
-function MoreSheet({ data, tab, setTab, onClose }) {
+function MoreSheet({ data, tab, setTab, onClose, useSearch, setUseSearch, talkBack, setTalkBack, wakeOn, setWakeOn, grain, setGrain, onBurst }) {
   const [person, setPerson] = useState(data.personality);
   const [profile, setProfile] = useState(data.profile);
   const [memText, setMemText] = useState("");
@@ -672,7 +630,7 @@ function MoreSheet({ data, tab, setTab, onClose }) {
     } catch (e) { setMsg(e.message); }
   }
 
-  const tabs = ["personality", "voice", "memory", "tasks", "permissions", "face", "screenshot", "history", "installer"];
+  const tabs = ["aries", "memory", "more"];
   return (
     <div className="more-sheet" role="dialog" aria-label="Settings and more">
       <div className="more-head">
@@ -688,7 +646,7 @@ function MoreSheet({ data, tab, setTab, onClose }) {
       </div>
       {msg && <p className="notice">{msg}</p>}
 
-      {tab === "personality" && (
+      {tab === "aries" && (
         <section>
           <h3>Personality</h3>
           <label>Voice
@@ -714,10 +672,22 @@ function MoreSheet({ data, tab, setTab, onClose }) {
             <textarea value={profile.about} onChange={(e) => setProfile({ ...profile, about: e.target.value })} rows="3" />
           </label>
           <button onClick={saveProfile}>Save profile</button>
+          <VoicePicker />
+          <h3>Talk &amp; search</h3>
+          <div className="toggle-row">
+            <button className="pill" type="button" aria-pressed={talkBack} onClick={() => setTalkBack((v) => !v)}>
+              Talk back
+            </button>
+            <button className="pill" type="button" aria-pressed={wakeOn} onClick={() => setWakeOn((v) => !v)}>
+              Wake phrase (“Hey Aries”)
+            </button>
+            <button className="pill" type="button" aria-pressed={useSearch} onClick={() => setUseSearch((v) => !v)}>
+              Search the web
+            </button>
+          </div>
+          <p className="fine">Talk back reads Aries' replies aloud. Wake phrase listens for “Hey Aries”. Search the web grounds the next answer in live results.</p>
         </section>
       )}
-
-      {tab === "voice" && <VoicePicker />}
 
       {tab === "memory" && (
         <section>
@@ -740,10 +710,38 @@ function MoreSheet({ data, tab, setTab, onClose }) {
             ))}
           </ul>
           {memories.length === 0 && <p>No memories yet. Teach Aries something above, or say “remember …” in chat.</p>}
+          <h3>Full history</h3>
+          <button onClick={async () => { if (confirm("Clear all chat history?")) { await api.clearChat(true); onClose(); } }}>
+            Clear chat history
+          </button>
+          <div className="history">
+            {(data.messages || []).map((m) => (
+              <div key={m.id} className={`hist-msg ${m.role}`}>
+                <strong>{m.role === "user" ? "You" : "Aries"}:</strong> {m.content}
+                {m.sources?.length > 0 && <Sources sources={m.sources} />}
+              </div>
+            ))}
+          </div>
         </section>
       )}
 
-      {tab === "tasks" && (
+      {tab === "more" && (
+        <>
+        <section>
+          <h3>Veil</h3>
+          <p className="fine">The veil is the dithered grain over the mountains. Tap the veil itself for a burst, or use these.</p>
+          <div className="grain-group" role="group" aria-label="Veil grain">
+            <button className="pill" type="button" aria-pressed={grain === "fine"} onClick={() => setGrain("fine")}>
+              Fine grain
+            </button>
+            <button className="pill" type="button" aria-pressed={grain === "coarse"} onClick={() => setGrain("coarse")}>
+              Coarse grain
+            </button>
+          </div>
+          <button className="pill" type="button" onClick={onBurst}>
+            Release a burst
+          </button>
+        </section>
         <section>
           <h3>Tasks &amp; reminders</h3>
           <div className="task-add">
@@ -764,9 +762,7 @@ function MoreSheet({ data, tab, setTab, onClose }) {
           </ul>
           <p className="fine">Tip: in chat, say “remind me to call a friend tomorrow at 9am” and Aries saves it.</p>
         </section>
-      )}
 
-      {tab === "permissions" && (
         <section>
           <h3>Permissions</h3>
           <p className="fine">Aries asks before anything sensitive. “Never” hard-blocks on the server.</p>
@@ -787,9 +783,7 @@ function MoreSheet({ data, tab, setTab, onClose }) {
             </label>
           ))}
         </section>
-      )}
 
-      {tab === "face" && (
         <section>
           <h3>Face login</h3>
           <p>Status: {data.face?.enrolled ? "Enrolled" : "Not enrolled"}</p>
@@ -799,9 +793,7 @@ function MoreSheet({ data, tab, setTab, onClose }) {
           {data.face?.enrolled && <button onClick={() => { if (confirm("Remove face enrollment?")) api.removeFace().then(onClose); }}>Remove enrollment</button>}
           <p className="fine">OpenCV LBPH recognition — a convenience lock, not biometric-grade security. The PIN is the real fallback; only its hash is stored.</p>
         </section>
-      )}
 
-      {tab === "screenshot" && (
         <section>
           <h3>Screenshot</h3>
           <p className="fine">Aries asks permission before reading any image.</p>
@@ -810,26 +802,7 @@ function MoreSheet({ data, tab, setTab, onClose }) {
           <button onClick={describeShot}>Describe this image</button>
           {shotDesc && <div className="shot-desc"><p>{shotDesc}</p></div>}
         </section>
-      )}
 
-      {tab === "history" && (
-        <section>
-          <h3>Full history</h3>
-          <button onClick={async () => { if (confirm("Clear all chat history?")) { await api.clearChat(true); onClose(); } }}>
-            Clear chat history
-          </button>
-          <div className="history">
-            {(data.messages || []).map((m) => (
-              <div key={m.id} className={`hist-msg ${m.role}`}>
-                <strong>{m.role === "user" ? "You" : "Aries"}:</strong> {m.content}
-                {m.sources?.length > 0 && <Sources sources={m.sources} />}
-              </div>
-            ))}
-          </div>
-        </section>
-      )}
-
-      {tab === "installer" && (
         <section>
           <h3>Desktop app &amp; installer</h3>
           <p>The desktop installer is packaged from the PyQt app in the Aries repo
@@ -842,6 +815,7 @@ function MoreSheet({ data, tab, setTab, onClose }) {
           <p><strong>Roadmap:</strong> web search ✓ · voice ✓ · tasks ✓ · installer ✓ ·
             face login ✓ · screenshot ✓ · PC control — last, not included here.</p>
         </section>
+        </>
       )}
     </div>
   );
@@ -882,7 +856,7 @@ function SetupWizard({ onDone, onSkip }) {
         )}
         {step === 3 && (
           <div>
-            <p>Permission defaults — change any of these later in Settings → Permissions.</p>
+            <p>Permission defaults — change any of these later in Settings → More.</p>
             {Object.entries(perms).map(([cap, s]) => (
               <label key={cap}>{PERM_LABELS[cap] || cap}
                 <select value={s} onChange={(e) => setPerms({ ...perms, [cap]: e.target.value })}>

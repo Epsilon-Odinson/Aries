@@ -215,21 +215,30 @@ button { min-height: 2.5rem; font-family: inherit; }
   padding: 0 1rem;
   z-index: 5;
 }
-.hint {
-  margin: 0;
-  font-size: 0.78rem;
-  color: var(--cream-dim);
-  letter-spacing: 0.04em;
-  text-shadow: 0 1px 12px rgba(8, 0, 11, 0.9);
-  text-align: center;
-}
-.controls {
+/* Gear: the one entry point to Settings — a small icon, top-right. */
+.gear-btn {
+  position: fixed;
+  top: max(0.9rem, env(safe-area-inset-top));
+  right: 1rem;
+  z-index: 6;
+  width: 2.4rem;
+  height: 2.4rem;
   display: flex;
-  flex-wrap: wrap;
-  justify-content: center;
   align-items: center;
-  gap: 0.55rem;
+  justify-content: center;
+  border: 1px solid var(--hairline);
+  background: var(--panel);
+  color: var(--cream);
+  border-radius: 999px;
+  font-size: 1.1rem;
+  cursor: pointer;
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
 }
+.gear-btn:hover { border-color: rgba(183, 139, 255, 0.55); }
+.gear-btn:focus-visible { outline: 2px solid var(--purple-soft); outline-offset: 3px; }
+/* Toggle row: on/off pills inside Settings. */
+.toggle-row { display: flex; flex-wrap: wrap; gap: 0.55rem; margin: 0.5rem 0; }
 .pill {
   appearance: none;
   border: 1px solid var(--hairline);

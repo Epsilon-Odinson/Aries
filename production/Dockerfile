@@ -21,6 +21,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY server/requirements.txt ./
 RUN pip install -r requirements.txt
 COPY server/ ./
+# Aries' soul and durable memory — read by personality.py at startup.
+COPY SOUL.md MEMORY.md ./
 COPY --from=web-build /build/web/dist ./static
 # Render injects $PORT; uvicorn binds it. Data dir holds SQLite + faces.
 RUN mkdir -p data/faces
