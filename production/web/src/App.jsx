@@ -13,18 +13,95 @@ const PERM_LABELS = {
   face_login: "Face login",
 };
 
+// Talk-back speaks in a masculine English voice — the same kind of fluent
+// narrator voice as the study-lesson audios. The browser supplies the
+// voices, so pick the best masculine English one available and fall back
+// to any English voice that doesn't read female.
+const MALE_VOICE_HINTS = ["male", "david", "daniel", "james", "guy", "brian", "alex", "fred", "george", "mark", "aaron", "oliver", "samuel"];
+const FEMALE_VOICE_HINTS = ["female", "samantha", "victoria", "karen", "moira", "tessa", "zira", "aria", "susan", "jenny", "sonia", "fiona", "kate", "serena", "linda"];
+
+let cachedVoices = [];
+function loadVoices() {
+  try {
+    cachedVoices = window.speechSynthesis.getVoices() || [];
+  } catch { /* ignore */ }
+}
+if ("speechSynthesis" in window) {
+  loadVoices();
+  window.speechSynthesis.onvoiceschanged = loadVoices;
+}
+
+function pickVoice() {
+  let vs = cachedVoices;
+  if (!vs.length) {
+    try { vs = window.speechSynthesis.getVoices() || []; } catch { vs = []; }
+  }
+  const isEnglish = (v) => /^en/i.test(v.lang || "");
+  const lower = (v) => (v.name || "").toLowerCase();
+  const male = vs.find((v) => isEnglish(v) && MALE_VOICE_HINTS.some((h) => lower(v).includes(h)));
+  if (male) return male;
+  return vs.find((v) => isEnglish(v) && !FEMALE_VOICE_HINTS.some((h) => lower(v).includes(h))) || null;
+}
+
 function speak(text, on) {
   if (!on || !("speechSynthesis" in window)) return;
   window.speechSynthesis.cancel();
   const u = new SpeechSynthesisUtterance(text);
+  const v = pickVoice();
+  if (v) u.voice = v;
   u.rate = 1;
+  u.pitch = 0.9;
   window.speechSynthesis.speak(u);
+}
+
+// Aries' replies appear as you read them — word by word, like he's
+// thinking as he speaks. A short beat at a comma, a longer beat at a
+// full stop. Never a whole wall of text dumped at once. Tap the reply
+// to show it all instantly.
+function useTypewriter(text) {
+  const [shown, setShown] = useState("");
+  const [done, setDone] = useState(true);
+  const timerRef = useRef(null);
+  const cancelRef = useRef(false);
+
+  useEffect(() => {
+    if (!text) { setShown(""); setDone(true); return; }
+    const tokens = text.match(/\S+\s*/g) || [];
+    let i = 0;
+    cancelRef.current = false;
+    setShown("");
+    setDone(false);
+    const step = () => {
+      if (cancelRef.current) return;
+      i += 1;
+      setShown(tokens.slice(0, i).join(""));
+      if (i >= tokens.length) { setDone(true); return; }
+      const last = tokens[i - 1].trim().slice(-1);
+      let delay = 55;
+      if (".!?".includes(last)) delay = 320;
+      else if (",;:".includes(last)) delay = 150;
+      timerRef.current = setTimeout(step, delay);
+    };
+    timerRef.current = setTimeout(step, 150);
+    return () => { cancelRef.current = true; clearTimeout(timerRef.current); };
+  }, [text]);
+
+  const finish = () => {
+    cancelRef.current = true;
+    clearTimeout(timerRef.current);
+    setShown(text || "");
+    setDone(true);
+  };
+
+  return { shown, done, finish };
 }
 
 export default function App() {
   const [data, setData] = useState(null);
   const [error, setError] = useState("");
   const [messages, setMessages] = useState([]);
+  const lastAries = messages.filter((m) => m.role === "aries").slice(-1)[0];
+  const typed = useTypewriter(lastAries?.content || "");
   const [input, setInput] = useState("");
   const [faceState, setFaceState] = useState("idle");
   const [status, setStatus] = useState("READY");
@@ -269,7 +346,8 @@ export default function App() {
           onMore={() => { setMini(false); setShowMore(true); }}
           due={due}
           onDismissDue={dismissDue}
-          lastReply={messages.filter((m) => m.role === "aries").slice(-1)[0]}
+          lastReply={lastAries}
+          typed={typed}
         />
       ) : (
         <main className="aries-hero">
@@ -293,7 +371,7 @@ export default function App() {
             </div>
           )}
 
-          <LatestReply messages={messages} />
+          <LatestReply message={lastAries} typed={typed} />
 
           <div className="composer-row">
             <button
@@ -365,13 +443,15 @@ export default function App() {
   );
 }
 
-function LatestReply({ messages }) {
-  const last = [...messages].reverse().find((m) => m.role === "aries");
-  if (!last) return <p className="latest-hint">Ask Aries anything — or tap the mic and talk.</p>;
+function LatestReply({ message, typed }) {
+  if (!message) return <p className="latest-hint">Ask Aries anything — or tap the mic and talk.</p>;
   return (
     <div className="latest-reply">
-      <p>{last.content}</p>
-      {last.sources?.length > 0 && <Sources sources={last.sources} />}
+      <p onClick={typed.finish} title="Tap to show the full reply">
+        {typed.shown}
+        {!typed.done && <span className="type-caret">▍</span>}
+      </p>
+      {typed.done && message.sources?.length > 0 && <Sources sources={message.sources} />}
     </div>
   );
 }
@@ -399,7 +479,7 @@ function MiniPanel(props) {
     <div className="mini-panel">
       <Face state={props.faceState} size={150} onClick={props.onExpand} label="Aries mini — tap to expand" />
       <p className="mini-status">ARIES — {props.status}</p>
-      {props.lastReply && <p className="mini-reply">{props.lastReply.content}</p>}
+      {props.lastReply && <p className="mini-reply" onClick={props.typed.finish} title="Tap to show the full reply">{props.typed.shown}{!props.typed.done && <span className="type-caret">▍</span>}</p>}
       {props.due.length > 0 && (
         <div className="due-card mini">
           <strong>Reminder:</strong> {props.due[0].title}
