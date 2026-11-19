@@ -150,8 +150,8 @@ export default function App() {
   const [diag, setDiag] = useState("");
   useEffect(() => {
     if (!data) return undefined;
+    const fmt = (r) => `${Math.round(r.width)}x${Math.round(r.height)} @${Math.round(r.x)},${Math.round(r.y)}`;
     const t = setTimeout(() => {
-      const fmt = (r) => `${Math.round(r.width)}x${Math.round(r.height)} @${Math.round(r.x)},${Math.round(r.y)}`;
       const canvases = [...document.querySelectorAll("canvas")].map(
         (c) => `canvas ${fmt(c.getBoundingClientRect())} parent=${String(c.parentElement?.className || "")}`
       );
@@ -165,11 +165,26 @@ export default function App() {
         chain.push(`${e.tagName}.${String(e.className || "")}`);
         e = e.parentElement;
       }
-      const s = `canvases=${canvases.length} [${canvases.join(" | ")}] veils=${veils.length} [${veils.join(" | ")}] at(964,725)=${chain.join(" > ")}`;
+      const rectOf = (sel) => {
+        const n = document.querySelector(sel);
+        return n ? `${sel}=${fmt(n.getBoundingClientRect())}` : `${sel}=missing`;
+      };
+      const s = `canvases=${canvases.length} [${canvases.join(" | ")}] veils=${veils.length} [${veils.join(" | ")}] at(964,725)=${chain.join(" > ")} | ${rectOf(".aries-hero")} | ${rectOf(".aries-lockup")} | ${rectOf(".latest-reply")} | ${rectOf(".composer-row")} | ${rectOf(".aries-veil")} | ${rectOf(".face-disc")}`;
       setDiag(s);
       document.title = `DIAG ${s}`;
     }, 3000);
-    return () => clearTimeout(t);
+    // After 6s, hide the PAGE veil canvas (the one inside .aries-veil) so a
+    // screenshot can tell whether the cream rectangle is the canvas or a DOM element.
+    const t2 = setTimeout(() => {
+      const pageCanvas = document.querySelector(".aries-veil .dither-veil canvas");
+      if (pageCanvas) pageCanvas.style.display = "none";
+      setDiag((prev) => `${prev} | PAGE-VEIL-CANVAS-HIDDEN`);
+      document.title = "DIAG PAGE-VEIL-CANVAS-HIDDEN";
+    }, 6000);
+    return () => {
+      clearTimeout(t);
+      clearTimeout(t2);
+    };
   }, [data]);
 
 
