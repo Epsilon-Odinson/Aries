@@ -146,6 +146,20 @@ export default function App() {
   const [grain, setGrain] = useState("fine");
   const wakeRef = useRef(null);
   const inputRef = useRef(null);
+  // TEMP DIAGNOSTIC v4 — remove once the white-rectangle root cause is found.
+  // After 4s, hide the face disc(s) so the hero text shifts up; a browser
+  // check can then see whether the cream rectangle moves up with the text
+  // (tied to the disc/text) or stays fixed (tied to the background/canvas).
+  useEffect(() => {
+    if (!data) return undefined;
+    const t = setTimeout(() => {
+      document.querySelectorAll(".face-disc").forEach((el) => {
+        el.style.display = "none";
+      });
+      document.title = `${document.title} | DISC-HIDDEN`;
+    }, 4000);
+    return () => clearTimeout(t);
+  }, [data]);
 
 
   const load = useCallback(async () => {
