@@ -43,6 +43,39 @@ SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 Base = declarative_base()
 
 
+class User(Base):
+    """One Aries account.
+
+    Admin is NOT by creation order: the admin is whoever holds the
+    admin username (env ARIES_ADMIN_USERNAME, default "epsilon") —
+    see auth.py. ``username`` keeps the casing the user typed;
+    ``username_lower`` is the canonical key (unique) used for
+    lookups and as the ``user_key`` on every data row, so "Epsilon"
+    and "epsilon" are the same account.
+    """
+
+    __tablename__ = "users"
+    id = Column(Integer, primary_key=True)
+    username = Column(String(64), nullable=False)
+    username_lower = Column(String(64), unique=True, nullable=False)
+    password_hash = Column(String(128), nullable=False)  # bcrypt hash, never plaintext
+    role = Column(String(16), default="user")  # admin | user (derived from the username; see auth.py)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class Session(Base):
+    """A login session: a random token handed to the frontend as a
+    Bearer token (kept in localStorage). The server checks it on every
+    request; expiry is 30 days. Logout deletes the row."""
+
+    __tablename__ = "sessions"
+    id = Column(Integer, primary_key=True)
+    token = Column(String(128), unique=True, nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    expires_at = Column(DateTime, nullable=False)
+
+
 class Profile(Base):
     __tablename__ = "profiles"
     id = Column(Integer, primary_key=True)
@@ -166,6 +199,10 @@ class OAuthState(Base):
     service = Column(String(32), nullable=False)  # google | spotify
     state = Column(String(128), unique=True, nullable=False)
     redirect_uri = Column(Text, default="")  # must match the token exchange
+    # Which account started this connect flow. The OAuth callback is a
+    # plain browser redirect (no Bearer token), so the state row is
+    # what ties the returning tokens to the right user.
+    user_key = Column(String(64), default="")
     created_at = Column(DateTime, default=datetime.utcnow)
 
 

@@ -9,7 +9,10 @@ Security rules (from the product decisions):
   server. It is never accepted from, or sent to, any client.
 - Permissions are enforced here, server-side; the UI is only a prompt.
 - Aries is private to Epsilon and Kelfy until it goes commercial.
-  This build ships no public sign-up; add accounts before opening it.
+  Accounts: everyone signs in with their own account and gets only
+  their own chat, memories, tasks and profile. Admin is whoever holds
+  the admin username (env ARIES_ADMIN_USERNAME, default "epsilon") —
+  by username, never by who signed up first. See auth.py.
 - No PC control in this build (no shell, no mouse/keyboard, no
   pyautogui). That is the LAST roadmap item and is not included here.
 
@@ -28,7 +31,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -36,6 +39,7 @@ from PIL import Image
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from . import auth as auth_mod
 from . import connections as conn_mod
 from . import face as face_mod
 from . import voice as voice_mod
@@ -49,9 +53,11 @@ from .db import (
     Profile,
     Screenshot,
     Task,
+    User,
     get_db,
     init_db,
 )
+from .auth import get_current_user, require_admin
 from .llm import AriesLLMError, chat as llm_chat, describe_image
 from .permissions import (
     CAPABILITIES,
@@ -63,7 +69,7 @@ from .permissions import (
 from .personality import MEMORY_TEXT, build_system_prompt, strip_greeting_prefix
 from .search import looks_like_current_question, search_web
 
-app = FastAPI(title="Aries", version="0.4.0")
+app = FastAPI(title="Aries", version="0.5.0")
 
 # Local dev only: the Vite dev server runs on :5173. In production the
 # backend serves the built frontend itself, so no CORS is needed.
@@ -77,7 +83,36 @@ app.add_middleware(
 
 init_db()
 
-USER = "default"  # Single-household build: Epsilon + Kelfy. Accounts land with commercial launch.
+def current_key(user: User = Depends(get_current_user)) -> str:
+    """Dependency: the signed-in user's data key (canonical username).
+
+    Every data endpoint depends on this, so all rows are scoped to the
+    logged-in account and a request without a live session gets 401.
+    """
+    return user.username_lower
+
+
+def get_connect_user(
+    request: Request,
+    db: Session = Depends(get_db),
+    token: str | None = Query(None),
+) -> User:
+    """Who is starting an OAuth connect flow.
+
+    The Connect button opens a new tab (window.open), which cannot
+    send an Authorization header — so the frontend appends the
+    session token as ?token=. The token stays on our own domain (it
+    is never forwarded to Google/Spotify); the provider only ever
+    sees the OAuth state value. A header Bearer token works too.
+    """
+    tok = token
+    auth_header = request.headers.get("Authorization", "")
+    if auth_header.lower().startswith("bearer "):
+        tok = auth_header[7:].strip()
+    user = auth_mod.user_for_token(db, tok) if tok else None
+    if not user:
+        raise HTTPException(401, "Sign in to use Aries.")
+    return user
 
 # ---------------------------------------------------------------- health
 
@@ -87,13 +122,91 @@ def health():
     return {
         "ok": True,
         "service": "aries",
-        "version": "0.4.0",
+        "version": "0.5.0",
         "key_configured": bool(os.getenv("NVIDIA_API_KEY")),
         "vision_configured": bool(os.getenv("VISION_MODEL")),
         "elevenlabs_configured": voice_mod.configured(),
         "db": "postgres" if os.getenv("DATABASE_URL") else "sqlite",
     }
 
+
+# ---------------------------------------------------------------- accounts
+
+# Sign-in, sign-up, and admin. Sessions are random tokens stored
+# server-side; the frontend sends them as Authorization: Bearer and
+# keeps them in localStorage. See auth.py for the rules — in short:
+# admin is the account holding ARIES_ADMIN_USERNAME (default
+# "epsilon"), by username on every login, never by signup order.
+
+
+class AuthIn(BaseModel):
+    username: str
+    password: str
+
+
+@app.post("/api/auth/register")
+def register(body: AuthIn, db: Session = Depends(get_db)):
+    # NOTE: no auth dependency here on purpose — this is how the
+    # first account (and every later one) is created.
+    try:
+        user = auth_mod.create_user(db, body.username, body.password)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    token = auth_mod.create_session(db, user)
+    return {"ok": True, "token": token, "user": auth_mod.public_user(user)}
+
+
+@app.post("/api/auth/login")
+def login(body: AuthIn, db: Session = Depends(get_db)):
+    # NOTE: no auth dependency here on purpose — this is sign-in.
+    user = auth_mod.authenticate(db, body.username, body.password)
+    if not user:
+        raise HTTPException(401, "Wrong username or password.")
+    token = auth_mod.create_session(db, user)
+    return {"ok": True, "token": token, "user": auth_mod.public_user(user)}
+
+
+@app.post("/api/auth/logout")
+def logout(
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    # Delete this session server-side; the frontend drops its token
+    # either way, so a logout always ends signed-in here too.
+    auth_header = request.headers.get("Authorization", "")
+    if auth_header.lower().startswith("bearer "):
+        auth_mod.delete_session(db, auth_header[7:].strip())
+    return {"ok": True}
+
+
+@app.get("/api/auth/me")
+def me(user: User = Depends(get_current_user)):
+    return {"ok": True, "user": auth_mod.public_user(user)}
+
+
+@app.get("/api/admin/users")
+def admin_list_users(admin: User = Depends(require_admin), db: Session = Depends(get_db), user_key: str = Depends(current_key)):
+    users = db.query(User).order_by(User.created_at.asc()).all()
+    return {"users": [auth_mod.public_user(u) for u in users]}
+
+
+@app.delete("/api/admin/users/{username}")
+def admin_delete_user(
+    username: str,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+    user_key: str = Depends(current_key),
+):
+    target = auth_mod.get_user_by_name(db, username)
+    if not target:
+        raise HTTPException(404, "No such user.")
+    if auth_mod.is_admin_username(target.username_lower):
+        raise HTTPException(400, "The admin account cannot be deleted.")
+    if target.id == admin.id:
+        raise HTTPException(400, "You cannot delete your own account.")
+    auth_mod.delete_user_data(db, target)
+    return {"ok": True, "deleted": target.username}
 
 # ---------------------------------------------------------------- voice (ElevenLabs)
 
@@ -109,7 +222,7 @@ class TTSIn(BaseModel):
 
 
 @app.post("/api/tts")
-def tts(body: TTSIn):
+def tts(body: TTSIn, user: User = Depends(get_current_user)):
     try:
         audio = voice_mod.synthesize(body.text, body.voice_id)
     except voice_mod.VoiceNotConfigured:
@@ -120,7 +233,7 @@ def tts(body: TTSIn):
 
 
 @app.get("/api/voices")
-def voices():
+def voices(user: User = Depends(get_current_user)):
     try:
         vs = voice_mod.list_voices()
     except voice_mod.VoiceNotConfigured:
@@ -138,24 +251,24 @@ def voices():
 # ---------------------------------------------------------------- helpers
 
 
-def _profile_dict(db: Session) -> dict:
-    row = db.query(Profile).filter_by(user_key=USER).first()
+def _profile_dict(db: Session, user_key: str) -> dict:
+    row = db.query(Profile).filter_by(user_key=user_key).first()
     if not row:
         return {"name": "", "call_name": "", "about": ""}
     return {"name": row.name, "call_name": row.call_name, "about": row.about}
 
 
-def _personality_row(db: Session) -> Personality:
-    row = db.query(Personality).filter_by(user_key=USER).first()
+def _personality_row(db: Session, user_key: str) -> Personality:
+    row = db.query(Personality).filter_by(user_key=user_key).first()
     if not row:
-        row = Personality(user_key=USER)
+        row = Personality(user_key=user_key)
         db.add(row)
         db.commit()
     return row
 
 
-def _personality_dict(db: Session) -> dict:
-    row = _personality_row(db)
+def _personality_dict(db: Session, user_key: str) -> dict:
+    row = _personality_row(db, user_key)
     return {
         "voice": row.voice,
         "warmth": row.warmth,
@@ -165,18 +278,18 @@ def _personality_dict(db: Session) -> dict:
     }
 
 
-def _memories(db: Session, include_pending: bool = False) -> list[Memory]:
-    q = db.query(Memory).filter_by(user_key=USER)
+def _memories(db: Session, user_key: str, include_pending: bool = False) -> list[Memory]:
+    q = db.query(Memory).filter_by(user_key=user_key)
     if not include_pending:
         q = q.filter_by(pending=False)
     return q.order_by(Memory.pinned.desc(), Memory.created_at.desc()).all()
 
 
-def _recall_memories(db: Session, text: str, limit: int = 5) -> list[str]:
+def _recall_memories(db: Session, user_key: str, text: str, limit: int = 5) -> list[str]:
     """Simple keyword recall: memories sharing a word with the message."""
     words = {w for w in re.findall(r"[a-z]{4,}", text.lower())}
     picked = []
-    for mem in _memories(db):
+    for mem in _memories(db, user_key):
         mem_words = set(re.findall(r"[a-z]{4,}", mem.text.lower()))
         if words & mem_words:
             picked.append(mem.text)
@@ -202,11 +315,11 @@ def _sources_json(rows) -> str:
 
 
 @app.get("/api/state")
-def state(db: Session = Depends(get_db)):
-    person = _personality_dict(db)
-    face = db.query(FaceEnrollment).filter_by(user_key=USER).first()
+def state(db: Session = Depends(get_db), user_key: str = Depends(current_key)):
+    person = _personality_dict(db, user_key)
+    face = db.query(FaceEnrollment).filter_by(user_key=user_key).first()
     return {
-        "profile": _profile_dict(db),
+        "profile": _profile_dict(db, user_key),
         "personality": person,
         "memory_file": MEMORY_TEXT,
         "memories": [
@@ -217,7 +330,7 @@ def state(db: Session = Depends(get_db)):
                 "pinned": m.pinned,
                 "pending": m.pending,
             }
-            for m in _memories(db, include_pending=True)
+            for m in _memories(db, user_key, include_pending=True)
         ],
         "tasks": [
             {
@@ -229,16 +342,16 @@ def state(db: Session = Depends(get_db)):
                 "reminded": t.reminded,
             }
             for t in db.query(Task)
-            .filter_by(user_key=USER)
+            .filter_by(user_key=user_key)
             .order_by(Task.due_at.asc().nullslast(), Task.created_at.desc())
             .all()
         ],
         "permissions": {
-            cap: get_setting(db, USER, cap) for cap in CAPABILITIES
+            cap: get_setting(db, user_key, cap) for cap in CAPABILITIES
         },
         "face": {
             "enrolled": bool(face),
-            "login_enabled": get_setting(db, USER, "face_login") == "always",
+            "login_enabled": get_setting(db, user_key, "face_login") == "always",
             "has_pin": bool(face and face.pin_hash),
         },
         "messages": [
@@ -249,7 +362,7 @@ def state(db: Session = Depends(get_db)):
                 "sources": json.loads(m.sources) if m.sources else [],
             }
             for m in db.query(Message)
-            .filter_by(user_key=USER)
+            .filter_by(user_key=user_key)
             .order_by(Message.created_at.desc())
             .limit(50)
             .all()[::-1]
@@ -267,15 +380,15 @@ class ProfileIn(BaseModel):
 
 
 @app.post("/api/profile")
-def save_profile(body: ProfileIn, db: Session = Depends(get_db)):
-    row = db.query(Profile).filter_by(user_key=USER).first()
+def save_profile(body: ProfileIn, db: Session = Depends(get_db), user_key: str = Depends(current_key)):
+    row = db.query(Profile).filter_by(user_key=user_key).first()
     if not row:
-        row = Profile(user_key=USER)
+        row = Profile(user_key=user_key)
         db.add(row)
     row.name, row.call_name, row.about = body.name, body.call_name, body.about
     row.updated_at = datetime.utcnow()
     db.commit()
-    return {"ok": True, "profile": _profile_dict(db)}
+    return {"ok": True, "profile": _profile_dict(db, user_key)}
 
 
 class PersonalityIn(BaseModel):
@@ -287,8 +400,8 @@ class PersonalityIn(BaseModel):
 
 
 @app.post("/api/personality")
-def save_personality(body: PersonalityIn, db: Session = Depends(get_db)):
-    row = _personality_row(db)
+def save_personality(body: PersonalityIn, db: Session = Depends(get_db), user_key: str = Depends(current_key)):
+    row = _personality_row(db, user_key)
     if body.voice not in ("companion", "mentor", "hype", "calm"):
         raise HTTPException(400, "Unknown voice")
     row.voice, row.warmth = body.voice, body.warmth
@@ -299,7 +412,7 @@ def save_personality(body: PersonalityIn, db: Session = Depends(get_db)):
     )
     row.updated_at = datetime.utcnow()
     db.commit()
-    return {"ok": True, "personality": _personality_dict(db)}
+    return {"ok": True, "personality": _personality_dict(db, user_key)}
 
 
 # ---------------------------------------------------------------- chat
@@ -373,11 +486,11 @@ def _learnable_fact(text: str) -> str | None:
 
 
 @app.post("/api/chat", response_model=ChatOut)
-def chat_endpoint(body: ChatIn, db: Session = Depends(get_db)):
+def chat_endpoint(body: ChatIn, db: Session = Depends(get_db), user_key: str = Depends(current_key)):
     text = body.message.strip()
     if not text:
         raise HTTPException(400, "Empty message")
-    db.add(Message(user_key=USER, role="user", content=text))
+    db.add(Message(user_key=user_key, role="user", content=text))
     db.commit()
 
     # Tasks: "remind me to ..." saves a task, no LLM call needed.
@@ -385,7 +498,7 @@ def chat_endpoint(body: ChatIn, db: Session = Depends(get_db)):
     task_added = None
     if reminder:
         task = Task(
-            user_key=USER,
+            user_key=user_key,
             title=reminder["title"],
             due_at=reminder["due_at"],
         )
@@ -399,7 +512,7 @@ def chat_endpoint(body: ChatIn, db: Session = Depends(get_db)):
         reply = f"Task kept: {task.title}."
         if task.due_at:
             reply += f" I'll remind you at {task.due_at.strftime('%H:%M')}."
-        db.add(Message(user_key=USER, role="aries", content=reply))
+        db.add(Message(user_key=user_key, role="aries", content=reply))
         db.commit()
         return ChatOut(reply=reply, task_added=task_added)
 
@@ -408,16 +521,16 @@ def chat_endpoint(body: ChatIn, db: Session = Depends(get_db)):
     fact = _learnable_fact(text)
     if fact:
         try:
-            require(db, USER, "save_memory", consent=bool(body.consent.get("save_memory")))
-            mem = Memory(user_key=USER, text=fact, pending=False)
+            require(db, user_key, "save_memory", consent=bool(body.consent.get("save_memory")))
+            mem = Memory(user_key=user_key, text=fact, pending=False)
             db.add(mem)
             db.commit()
             pending_memory = {"id": mem.id, "text": fact, "saved": True}
         except PermissionDenied:
-            if get_setting(db, USER, "save_memory") == "never":
+            if get_setting(db, user_key, "save_memory") == "never":
                 pending_memory = None
             else:
-                mem = Memory(user_key=USER, text=fact, pending=True)
+                mem = Memory(user_key=user_key, text=fact, pending=True)
                 db.add(mem)
                 db.commit()
                 pending_memory = {"id": mem.id, "text": fact, "saved": False}
@@ -431,14 +544,14 @@ def chat_endpoint(body: ChatIn, db: Session = Depends(get_db)):
         try:
             require(
                 db,
-                USER,
+                user_key,
                 "web_search",
                 consent=bool(body.consent.get("web_search")),
             )
         except PermissionDenied as exc:
             db.add(
                 Message(
-                    user_key=USER,
+                    user_key=user_key,
                     role="aries",
                     content="I haven't checked the web — that needs your permission first.",
                 )
@@ -468,15 +581,15 @@ def chat_endpoint(body: ChatIn, db: Session = Depends(get_db)):
                 + "\n".join(lines)
             )
 
-    person = _personality_dict(db)
+    person = _personality_dict(db, user_key)
     system = build_system_prompt(
         voice=person["voice"],
         warmth=person["warmth"],
         directness=person["directness"],
         humour=person["humour"],
         notes=person["notes"],
-        profile=_profile_dict(db),
-        memories=_recall_memories(db, text),
+        profile=_profile_dict(db, user_key),
+        memories=_recall_memories(db, user_key, text),
     )
     history = [
         {
@@ -489,7 +602,7 @@ def chat_endpoint(body: ChatIn, db: Session = Depends(get_db)):
             else m.content,
         }
         for m in db.query(Message)
-        .filter_by(user_key=USER)
+        .filter_by(user_key=user_key)
         .order_by(Message.created_at.desc())
         .limit(10)
         .all()[::-1]
@@ -508,7 +621,7 @@ def chat_endpoint(body: ChatIn, db: Session = Depends(get_db)):
     # but the model still opens replies with it. Strip it here, before the
     # reply is stored or returned, so it can never open a reply.
     reply = strip_greeting_prefix(reply)
-    db.add(Message(user_key=USER, role="aries", content=reply, sources=_sources_json(sources)))
+    db.add(Message(user_key=user_key, role="aries", content=reply, sources=_sources_json(sources)))
     db.commit()
     return ChatOut(
         reply=reply,
@@ -524,12 +637,12 @@ class ClearIn(BaseModel):
 
 
 @app.post("/api/chat/clear")
-def clear_chat(body: ClearIn, db: Session = Depends(get_db)):
+def clear_chat(body: ClearIn, db: Session = Depends(get_db), user_key: str = Depends(current_key)):
     try:
-        require(db, USER, "clear_chat", consent=body.consent)
+        require(db, user_key, "clear_chat", consent=body.consent)
     except PermissionDenied as exc:
         raise HTTPException(403, str(exc)) from exc
-    db.query(Message).filter_by(user_key=USER).delete()
+    db.query(Message).filter_by(user_key=user_key).delete()
     db.commit()
     return {"ok": True}
 
@@ -543,20 +656,20 @@ class MemoryIn(BaseModel):
 
 
 @app.post("/api/memories")
-def add_memory(body: MemoryIn, db: Session = Depends(get_db)):
+def add_memory(body: MemoryIn, db: Session = Depends(get_db), user_key: str = Depends(current_key)):
     try:
-        require(db, USER, "save_memory", consent=True)
+        require(db, user_key, "save_memory", consent=True)
     except PermissionDenied as exc:
         raise HTTPException(403, str(exc)) from exc
-    mem = Memory(user_key=USER, text=body.text.strip(), category=body.category)
+    mem = Memory(user_key=user_key, text=body.text.strip(), category=body.category)
     db.add(mem)
     db.commit()
     return {"ok": True, "id": mem.id}
 
 
 @app.post("/api/memories/{memory_id}/approve")
-def approve_memory(memory_id: int, db: Session = Depends(get_db)):
-    mem = db.query(Memory).filter_by(id=memory_id, user_key=USER).first()
+def approve_memory(memory_id: int, db: Session = Depends(get_db), user_key: str = Depends(current_key)):
+    mem = db.query(Memory).filter_by(id=memory_id, user_key=user_key).first()
     if not mem:
         raise HTTPException(404, "Memory not found")
     mem.pending = False
@@ -565,8 +678,8 @@ def approve_memory(memory_id: int, db: Session = Depends(get_db)):
 
 
 @app.post("/api/memories/{memory_id}/pin")
-def pin_memory(memory_id: int, db: Session = Depends(get_db)):
-    mem = db.query(Memory).filter_by(id=memory_id, user_key=USER).first()
+def pin_memory(memory_id: int, db: Session = Depends(get_db), user_key: str = Depends(current_key)):
+    mem = db.query(Memory).filter_by(id=memory_id, user_key=user_key).first()
     if not mem:
         raise HTTPException(404, "Memory not found")
     mem.pinned = not mem.pinned
@@ -575,12 +688,12 @@ def pin_memory(memory_id: int, db: Session = Depends(get_db)):
 
 
 @app.delete("/api/memories/{memory_id}")
-def delete_memory(memory_id: int, db: Session = Depends(get_db)):
+def delete_memory(memory_id: int, db: Session = Depends(get_db), user_key: str = Depends(current_key)):
     try:
-        require(db, USER, "delete_memory", consent=True)
+        require(db, user_key, "delete_memory", consent=True)
     except PermissionDenied as exc:
         raise HTTPException(403, str(exc)) from exc
-    mem = db.query(Memory).filter_by(id=memory_id, user_key=USER).first()
+    mem = db.query(Memory).filter_by(id=memory_id, user_key=user_key).first()
     if not mem:
         raise HTTPException(404, "Memory not found")
     db.delete(mem)
@@ -598,22 +711,22 @@ class TaskIn(BaseModel):
 
 
 @app.post("/api/tasks")
-def add_task(body: TaskIn, db: Session = Depends(get_db)):
+def add_task(body: TaskIn, db: Session = Depends(get_db), user_key: str = Depends(current_key)):
     due = None
     if body.due_at:
         try:
             due = datetime.fromisoformat(body.due_at.replace("Z", "+00:00"))
         except ValueError:
             raise HTTPException(400, "Bad due_at format") from None
-    task = Task(user_key=USER, title=body.title.strip(), notes=body.notes, due_at=due)
+    task = Task(user_key=user_key, title=body.title.strip(), notes=body.notes, due_at=due)
     db.add(task)
     db.commit()
     return {"ok": True, "id": task.id}
 
 
 @app.post("/api/tasks/{task_id}/done")
-def done_task(task_id: int, db: Session = Depends(get_db)):
-    task = db.query(Task).filter_by(id=task_id, user_key=USER).first()
+def done_task(task_id: int, db: Session = Depends(get_db), user_key: str = Depends(current_key)):
+    task = db.query(Task).filter_by(id=task_id, user_key=user_key).first()
     if not task:
         raise HTTPException(404, "Task not found")
     task.done = not task.done
@@ -622,8 +735,8 @@ def done_task(task_id: int, db: Session = Depends(get_db)):
 
 
 @app.post("/api/tasks/{task_id}/reminded")
-def reminded_task(task_id: int, db: Session = Depends(get_db)):
-    task = db.query(Task).filter_by(id=task_id, user_key=USER).first()
+def reminded_task(task_id: int, db: Session = Depends(get_db), user_key: str = Depends(current_key)):
+    task = db.query(Task).filter_by(id=task_id, user_key=user_key).first()
     if not task:
         raise HTTPException(404, "Task not found")
     task.reminded = True
@@ -632,8 +745,8 @@ def reminded_task(task_id: int, db: Session = Depends(get_db)):
 
 
 @app.delete("/api/tasks/{task_id}")
-def delete_task(task_id: int, db: Session = Depends(get_db)):
-    task = db.query(Task).filter_by(id=task_id, user_key=USER).first()
+def delete_task(task_id: int, db: Session = Depends(get_db), user_key: str = Depends(current_key)):
+    task = db.query(Task).filter_by(id=task_id, user_key=user_key).first()
     if not task:
         raise HTTPException(404, "Task not found")
     db.delete(task)
@@ -642,11 +755,11 @@ def delete_task(task_id: int, db: Session = Depends(get_db)):
 
 
 @app.get("/api/tasks/due")
-def due_tasks(db: Session = Depends(get_db)):
+def due_tasks(db: Session = Depends(get_db), user_key: str = Depends(current_key)):
     now = datetime.utcnow()
     rows = (
         db.query(Task)
-        .filter_by(user_key=USER, done=False, reminded=False)
+        .filter_by(user_key=user_key, done=False, reminded=False)
         .filter(Task.due_at.isnot(None), Task.due_at <= now)
         .all()
     )
@@ -660,8 +773,8 @@ def due_tasks(db: Session = Depends(get_db)):
 
 
 @app.get("/api/permissions")
-def list_permissions(db: Session = Depends(get_db)):
-    return {cap: get_setting(db, USER, cap) for cap in CAPABILITIES}
+def list_permissions(db: Session = Depends(get_db), user_key: str = Depends(current_key)):
+    return {cap: get_setting(db, user_key, cap) for cap in CAPABILITIES}
 
 
 class PermissionIn(BaseModel):
@@ -670,9 +783,9 @@ class PermissionIn(BaseModel):
 
 
 @app.post("/api/permissions")
-def save_permission(body: PermissionIn, db: Session = Depends(get_db)):
+def save_permission(body: PermissionIn, db: Session = Depends(get_db), user_key: str = Depends(current_key)):
     try:
-        setting = set_setting(db, USER, body.capability, body.setting)
+        setting = set_setting(db, user_key, body.capability, body.setting)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     return {"ok": True, "capability": body.capability, "setting": setting}
@@ -692,19 +805,19 @@ def save_permission(body: PermissionIn, db: Session = Depends(get_db)):
 
 
 @app.get("/api/connections")
-def list_connections(db: Session = Depends(get_db)):
-    return conn_mod.status(db, USER)
+def list_connections(db: Session = Depends(get_db), user_key: str = Depends(current_key)):
+    return conn_mod.status(db, user_key)
 
 
 @app.get("/api/connections/{service}/connect")
-def start_connect(service: str, request: Request, db: Session = Depends(get_db)):
+def start_connect(service: str, request: Request, db: Session = Depends(get_db), user: User = Depends(get_connect_user)):
     if service not in ("google", "spotify"):
         raise HTTPException(400, "Unknown service")
     try:
         if service == "google":
-            url = conn_mod.google_auth_url(db, request)
+            url = conn_mod.google_auth_url(db, request, user.username_lower)
         else:
-            url = conn_mod.spotify_auth_url(db, request)
+            url = conn_mod.spotify_auth_url(db, request, user.username_lower)
     except conn_mod.NotConfigured as exc:
         raise HTTPException(503, str(exc)) from exc
     return RedirectResponse(url, status_code=302)
@@ -737,6 +850,9 @@ def oauth_callback(
     error: str | None = None,
     db: Session = Depends(get_db),
 ):
+    # NOTE: no auth dependency here on purpose — the provider redirects
+    # the browser back with no Bearer token. The user is recovered
+    # from the OAuth state row created at connect time.
     if service not in ("google", "spotify"):
         raise HTTPException(400, "Unknown service")
     name = "Gmail" if service == "google" else "Spotify"
@@ -771,10 +887,10 @@ def oauth_callback(
 
 
 @app.post("/api/connections/{service}/disconnect")
-def disconnect_connection(service: str, db: Session = Depends(get_db)):
+def disconnect_connection(service: str, db: Session = Depends(get_db), user_key: str = Depends(current_key)):
     if service not in ("google", "spotify"):
         raise HTTPException(400, "Unknown service")
-    conn_mod.disconnect(db, USER, service)
+    conn_mod.disconnect(db, user_key, service)
     return {"ok": True, "service": service}
 
 
@@ -787,31 +903,32 @@ async def enroll_face(
     name: str = Form(""),
     pin: str = Form(""),
     db: Session = Depends(get_db),
+    user_key: str = Depends(current_key),
 ):
     data = await file.read()
     try:
-        result = face_mod.enroll(USER, data)
+        result = face_mod.enroll(user_key, data)
     except RuntimeError as exc:
         raise HTTPException(503, str(exc)) from exc
     if not result.get("ok"):
         raise HTTPException(400, result.get("error", "Enrollment failed"))
-    row = db.query(FaceEnrollment).filter_by(user_key=USER).first()
+    row = db.query(FaceEnrollment).filter_by(user_key=user_key).first()
     if not row:
-        row = FaceEnrollment(user_key=USER)
+        row = FaceEnrollment(user_key=user_key)
         db.add(row)
     row.name = name or row.name
     if pin:
         row.pin_hash = face_mod.pin_hash(pin)
     db.commit()
-    set_setting(db, USER, "face_login", "always")
+    set_setting(db, user_key, "face_login", "always")
     return {"ok": True}
 
 
 @app.post("/api/face/verify")
-async def verify_face(file: UploadFile = File(...), db: Session = Depends(get_db)):
+async def verify_face(file: UploadFile = File(...), db: Session = Depends(get_db), user_key: str = Depends(current_key)):
     data = await file.read()
     try:
-        result = face_mod.verify(USER, data)
+        result = face_mod.verify(user_key, data)
     except RuntimeError as exc:
         raise HTTPException(503, str(exc)) from exc
     if not result.get("ok"):
@@ -820,10 +937,10 @@ async def verify_face(file: UploadFile = File(...), db: Session = Depends(get_db
 
 
 @app.post("/api/face/remove")
-def remove_face(db: Session = Depends(get_db)):
-    face_mod.remove(USER)
-    db.query(FaceEnrollment).filter_by(user_key=USER).delete()
-    set_setting(db, USER, "face_login", "ask")
+def remove_face(db: Session = Depends(get_db), user_key: str = Depends(current_key)):
+    face_mod.remove(user_key)
+    db.query(FaceEnrollment).filter_by(user_key=user_key).delete()
+    set_setting(db, user_key, "face_login", "ask")
     db.commit()
     return {"ok": True}
 
@@ -833,10 +950,10 @@ class PinIn(BaseModel):
 
 
 @app.post("/api/face/set-pin")
-def set_pin(body: PinIn, db: Session = Depends(get_db)):
-    row = db.query(FaceEnrollment).filter_by(user_key=USER).first()
+def set_pin(body: PinIn, db: Session = Depends(get_db), user_key: str = Depends(current_key)):
+    row = db.query(FaceEnrollment).filter_by(user_key=user_key).first()
     if not row:
-        row = FaceEnrollment(user_key=USER)
+        row = FaceEnrollment(user_key=user_key)
         db.add(row)
     row.pin_hash = face_mod.pin_hash(body.pin)
     db.commit()
@@ -844,8 +961,8 @@ def set_pin(body: PinIn, db: Session = Depends(get_db)):
 
 
 @app.post("/api/face/unlock-pin")
-def unlock_pin(body: PinIn, db: Session = Depends(get_db)):
-    row = db.query(FaceEnrollment).filter_by(user_key=USER).first()
+def unlock_pin(body: PinIn, db: Session = Depends(get_db), user_key: str = Depends(current_key)):
+    row = db.query(FaceEnrollment).filter_by(user_key=user_key).first()
     if not row or not row.pin_hash:
         raise HTTPException(400, "No PIN set")
     return {"ok": row.pin_hash == face_mod.pin_hash(body.pin)}
@@ -860,9 +977,10 @@ async def screenshot(
     question: str = Form(""),
     consent: bool = Form(False),
     db: Session = Depends(get_db),
+    user_key: str = Depends(current_key),
 ):
     try:
-        require(db, USER, "screenshot", consent=consent)
+        require(db, user_key, "screenshot", consent=consent)
     except PermissionDenied as exc:
         raise HTTPException(403, str(exc)) from exc
     data = await file.read()
@@ -880,7 +998,7 @@ async def screenshot(
             f"the image is {width}x{height} px ({file.content_type})."
         )
     shot = Screenshot(
-        user_key=USER,
+        user_key=user_key,
         filename=file.filename or "screenshot",
         mime=file.content_type or "",
         width=width,

@@ -121,6 +121,7 @@ button { min-height: 2.5rem; font-family: inherit; }
   margin: -0.75rem;
   cursor: pointer;
   border-radius: 999px;
+  touch-action: manipulation;
   -webkit-tap-highlight-color: transparent;
   transition: transform 0.45s cubic-bezier(0.22, 1, 0.36, 1);
 }
@@ -297,10 +298,36 @@ button { min-height: 2.5rem; font-family: inherit; }
 .grain-group .pill[aria-pressed="true"] { background: var(--purple); }
 
 /* ---------- Mini mode (press the face) ---------- */
+/* The greeting, the reply and reminders are REMOVED from the layout
+   in mini mode, not just faded out: an invisible greeting is still
+   ~170px tall, and with a long reply the column grew taller than the
+   viewport — the face was pushed off the top of the screen while
+   body { overflow: hidden } stopped any scrolling, so mini mode had
+   no way back. With only the face in the column it always fits. */
 body.mini .visor { width: 84px; }
-body.mini .greeting { opacity: 0; transform: translateY(10px); pointer-events: none; }
-body.mini .status { opacity: 0; }
+body.mini .greeting,
+body.mini .latest-reply,
+body.mini .latest-hint,
+body.mini .due-card { display: none; }
 body.mini .stage { justify-content: flex-end; padding-bottom: 12.5rem; }
+
+/* Full-screen restore button in mini mode — a second, obvious way
+   back, next to the face tap, so mini can never trap the app again. */
+.expand-btn {
+  position: fixed;
+  right: 1rem;
+  bottom: 7.5rem;
+  z-index: 30;
+  background: var(--purple);
+  color: #fff;
+  border: 1px solid var(--purple-soft);
+  border-radius: 999px;
+  padding: 0.6rem 1rem;
+  cursor: pointer;
+  font-size: 0.9rem;
+  font-weight: 600;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.5);
+}
 
 /* ---------- Desktop shell mini window (face only, 200px) ---------- */
 /* In the desktop shell the WINDOW itself shrinks to 200px, so the
@@ -322,7 +349,9 @@ body.desktop-mini .stage {
   padding-bottom: 0;
   -webkit-app-region: drag;
 }
-body.desktop-mini .face-btn { cursor: pointer; -webkit-app-region: drag; }
+/* The stage is the drag area; the face itself must NOT be a drag
+   region, or Electron swallows the tap that restores full size. */
+body.desktop-mini .face-btn { cursor: pointer; -webkit-app-region: no-drag; }
 
 @media (max-height: 480px) {
   .visor { width: 110px; }
@@ -614,3 +643,85 @@ body.desktop-mini .face-btn { cursor: pointer; -webkit-app-region: drag; }
   background: rgba(19, 3, 30, 0.8); border: 1px solid rgba(183, 139, 255, 0.3);
   border-radius: 12px; padding: 0.9rem; margin-top: 0.75rem; line-height: 1.6;
 }
+
+/* ---------- Accounts: login screen ---------- */
+.auth-screen {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  padding: 2rem 1rem;
+  text-align: center;
+  color: var(--cream);
+  background: var(--bg-deep);
+}
+.auth-screen h1 {
+  margin: 0;
+  font-size: clamp(2.6rem, 9vw, 4rem);
+  font-weight: 800;
+  letter-spacing: 0.08em;
+}
+.auth-screen .auth-sub { color: var(--cream-dim); margin: 0 0 0.5rem; max-width: 340px; }
+.auth-screen form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  width: min(320px, 90vw);
+}
+.auth-screen input {
+  padding: 0.7rem 0.9rem;
+  border-radius: 10px;
+  border: 1px solid rgba(183, 139, 255, 0.3);
+  background: rgba(19, 3, 30, 0.8);
+  color: var(--cream);
+  font-size: 1rem;
+  font-family: var(--sans);
+}
+.auth-screen .auth-btn {
+  background: var(--purple);
+  color: #fff;
+  border: none;
+  border-radius: 999px;
+  padding: 0.7rem 1rem;
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 1rem;
+}
+.auth-screen .auth-btn:disabled { opacity: 0.6; cursor: wait; }
+.auth-screen .link-btn {
+  background: none;
+  border: none;
+  color: var(--purple-soft);
+  cursor: pointer;
+  text-decoration: underline;
+  font-size: 0.9rem;
+  min-height: 0;
+  padding: 0.25rem;
+}
+.auth-screen .notice { width: min(320px, 90vw); }
+
+/* ---------- Admin panel: user list ---------- */
+.user-list { list-style: none; padding: 0; margin: 0.5rem 0; }
+.user-list li {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.5rem;
+  border-bottom: 1px solid var(--hairline);
+}
+
+/* ---------- Voice self-test ---------- */
+.voice-test { margin-top: 1.5rem; }
+.test-row {
+  display: flex;
+  gap: 0.5rem;
+  align-items: flex-start;
+  margin: 0.6rem 0;
+  text-align: left;
+  line-height: 1.5;
+}
+.test-row .ok { color: #7dff9e; font-weight: 700; }
+.test-row .bad { color: #ff9d9d; font-weight: 700; }

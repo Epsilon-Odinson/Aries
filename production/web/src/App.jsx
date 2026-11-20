@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Veil from "./Veil.jsx";
 import Face from "./Face.jsx";
-import { api, local, isDesktop } from "./api.js";
+import { api, local, isDesktop, getToken, setToken } from "./api.js";
 
 // Desktop shell only: does a message look like a PC action (open an
 // app, type, click, shutdown, screenshot, ...)? Port of the Python
@@ -58,9 +58,11 @@ function setSavedElevenVoiceId(id) {
 
 let elevenAudio = null;
 let elevenGen = 0;
+let browserGen = 0;
 function stopAllSpeech() {
   try { window.speechSynthesis.cancel(); } catch { /* ignore */ }
   elevenGen++;
+  browserGen++;
   if (elevenAudio) {
     try { elevenAudio.pause(); } catch { /* ignore */ }
     elevenAudio = null;
@@ -90,29 +92,32 @@ function splitSentences(text) {
   return chunks.length ? chunks : [text];
 }
 
-// Returns true when ElevenLabs spoke the text, false when it is not
-// configured or the request failed (caller falls back to the browser).
+// Returns "spoke" (talked), "unavailable" (not configured or the
+// request failed — the caller falls back to the device's voices), or
+// "blocked" (the browser refused to play sound until the user taps
+// something — the device fallback would fail the same way, so the
+// caller reports it instead of silently falling back and going quiet).
 // Speaks chunk by chunk, fetching the next chunk while the current one
 // plays, so the first sentence is heard quickly and the rest follow
 // without a gap. A failed chunk is skipped, not fatal.
-async function speakEleven(text) {
-  if (!elevenConfigured) return false;
+async function speakEleven(text, onErr) {
+  if (!elevenConfigured) return "unavailable";
   const chunks = splitSentences(text);
   stopAllSpeech();
   const gen = elevenGen;
   let spokeAny = false;
   let pending = api.tts(chunks[0], savedElevenVoiceId);
   for (let i = 0; i < chunks.length; i++) {
-    if (gen !== elevenGen) return spokeAny;
+    if (gen !== elevenGen) return spokeAny ? "spoke" : "unavailable";
     let blob;
     try {
       blob = await pending;
     } catch {
-      if (!spokeAny) return false;
+      if (!spokeAny) return "unavailable";
       pending = i + 1 < chunks.length ? api.tts(chunks[i + 1], savedElevenVoiceId) : null;
       continue;
     }
-    if (gen !== elevenGen) return spokeAny;
+    if (gen !== elevenGen) return spokeAny ? "spoke" : "unavailable";
     pending = i + 1 < chunks.length ? api.tts(chunks[i + 1], savedElevenVoiceId) : null;
     const url = URL.createObjectURL(blob);
     const a = new Audio(url);
@@ -128,11 +133,23 @@ async function speakEleven(text) {
         resolve();
       };
     });
-    try { await a.play(); } catch { URL.revokeObjectURL(url); return spokeAny; }
+    try {
+      await a.play();
+    } catch (e) {
+      URL.revokeObjectURL(url);
+      // Autoplay policy: sound is blocked until the user has
+      // interacted with the page. Say so plainly instead of going
+      // quiet — the device-voice fallback would be blocked too.
+      if (e?.name === "NotAllowedError" && !spokeAny) {
+        onErr?.("Aries couldn't talk — the browser blocks sound until you tap something on the page. Tap anywhere, then ask again.");
+        return "blocked";
+      }
+      return spokeAny ? "spoke" : "unavailable";
+    }
     spokeAny = true;
     await ended;
   }
-  return spokeAny;
+  return spokeAny ? "spoke" : "unavailable";
 }
 
 let cachedVoices = [];
@@ -176,23 +193,41 @@ function pickVoice() {
   return vs.find((v) => isEnglish(v) && !FEMALE_VOICE_HINTS.some((h) => lower(v).includes(h))) || null;
 }
 
-function speakBrowser(text) {
-  if (!("speechSynthesis" in window)) return;
+function speakBrowser(text, onErr) {
+  if (!("speechSynthesis" in window)) {
+    onErr?.("This browser has no built-in voices, and the ElevenLabs voice isn't set up — talk-back can't speak here.");
+    return;
+  }
+  // Chrome drops a speak() that follows cancel() too closely, so the
+  // reply would go silent with no error at all. Cancel, then speak a
+  // beat later. The utterance's own error is reported, not swallowed.
   stopAllSpeech();
+  const myGen = ++browserGen;
   const u = new SpeechSynthesisUtterance(text);
   const v = pickVoice();
   if (v) u.voice = v;
   u.rate = 1;
   u.pitch = 0.9;
-  window.speechSynthesis.speak(u);
+  u.onerror = (e) => {
+    if (e.error && e.error !== "canceled" && e.error !== "interrupted") {
+      onErr?.(`Talk-back failed in this browser (${e.error}).`);
+    }
+  };
+  setTimeout(() => {
+    if (myGen !== browserGen) return; // superseded by a newer reply
+    try { window.speechSynthesis.speak(u); } catch { /* ignore */ }
+  }, 90);
 }
 
 // Talk-back: ElevenLabs narrator voice when the server has it,
-// the device's built-in voices when it doesn't.
-async function speak(text, on) {
+// the device's built-in voices when it doesn't. onErr is called with
+// a plain message when Aries can't speak at all, so the failure is
+// visible instead of silent.
+async function speak(text, on, onErr) {
   if (!on) return;
-  if (await speakEleven(text)) return;
-  speakBrowser(text);
+  const res = await speakEleven(text, onErr);
+  if (res === "spoke" || res === "blocked") return;
+  speakBrowser(text, onErr);
 }
 
 // Aries' replies appear as you read them — word by word, like he's
@@ -258,6 +293,11 @@ export default function App() {
   const [locked, setLocked] = useState(false);
   const [setupOpen, setSetupOpen] = useState(false);
   const [notice, setNotice] = useState("");
+  // Accounts: nobody sees chat before signing in. user is null until
+  // /api/auth/me confirms the stored token; authReady says the check
+  // has run, so the login screen never flashes over a signed-in app.
+  const [user, setUser] = useState(null);
+  const [authReady, setAuthReady] = useState(false);
   // Desktop shell: a PC plan waiting for the user to confirm it.
   const [pcPlan, setPcPlan] = useState(null);
   // ElevenLabs voices from the server (empty until the key is set).
@@ -268,6 +308,12 @@ export default function App() {
   const [burstSignal, setBurstSignal] = useState(0);
   const wakeRef = useRef(null);
   const inputRef = useRef(null);
+  // Last "Hey Aries" trigger — one greeting per trigger, not one per
+  // interim result. wakeOnRef mirrors the toggle for closures that
+  // outlive their render (dictation resuming the wake listener).
+  const lastWakeAt = useRef(0);
+  const wakeOnRef = useRef(false);
+  useEffect(() => { wakeOnRef.current = wakeOn; }, [wakeOn]);
 
   // Mini mode is the web front's body class: the visor shrinks, the
   // greeting and status fade out, and the stage moves to the bottom.
@@ -291,12 +337,40 @@ export default function App() {
       if (s.face?.enrolled && s.permissions?.face_login === "always") setLocked(true);
       if (!localStorage.getItem("aries-setup-done") && !s.profile?.name) setSetupOpen(true);
     } catch (e) {
-      setError(e.message);
+      // 401 means the session died (logged out elsewhere, expired,
+      // or the account was deleted) — back to the login screen.
+      if (e.status === 401) {
+        setToken(null);
+        setUser(null);
+        setData(null);
+      } else {
+        setError(e.message);
+      }
     }
   }, []);
 
+  // Sign-in check first: no token, or a dead token, means the login
+  // screen. Only a confirmed account loads chat, voices and reminders.
   useEffect(() => {
-    load();
+    if (!getToken()) { setAuthReady(true); return; }
+    api.me()
+      .then((r) => {
+        setUser(r.user);
+        setAuthReady(true);
+        load();
+      })
+      .catch((e) => {
+        // 401 means the token is dead — back to login. Anything else
+        // (server down, network) keeps the token and shows the error
+        // screen instead, so a blip doesn't sign the user out.
+        if (e.status === 401) setToken(null);
+        else setError(e.message);
+        setAuthReady(true);
+      });
+  }, [load]);
+
+  useEffect(() => {
+    if (!user) return;
     // ElevenLabs voices: success means the server has a voice key.
     // 503 means it doesn't — talk-back stays on the device's voices.
     api.voices()
@@ -317,7 +391,18 @@ export default function App() {
       } catch { /* ignore */ }
     }, 30000);
     return () => clearInterval(t);
-  }, [load]);
+  }, [user]);
+
+  async function handleLogout() {
+    try { await api.logout(); } catch { /* token dies locally either way */ }
+    stopAllSpeech();
+    setToken(null);
+    setUser(null);
+    setData(null);
+    setMessages([]);
+    setShowMore(false);
+    setLocked(false);
+  }
 
   function askPermission(capability, why) {
     return new Promise((resolve) => {
@@ -388,7 +473,7 @@ export default function App() {
       setFaceState("speaking");
       setStatus("SPEAKING");
       setMessages((m) => [...m, { role: "aries", content: plan.reply || "Hey." }]);
-      speak(plan.reply || "Hey.", talkBack);
+      speak(plan.reply || "Hey.", talkBack, (m) => setNotice(m));
       setTimeout(() => { setFaceState("idle"); setStatus("READY"); }, 2500);
       return;
     }
@@ -420,7 +505,7 @@ export default function App() {
         setNotice(`Aries learned: "${res.pending_memory.text}" — approve it in Memory.`);
       }
       if (res.task_added) setNotice(`Task kept: ${res.task_added.title}`);
-      speak(res.reply, talkBack);
+      speak(res.reply, talkBack, (m) => setNotice(m));
       setTimeout(() => {
         setFaceState("idle");
         setStatus("READY");
@@ -451,7 +536,7 @@ export default function App() {
         ? `Done — ${res.done.join(" ")}`
         : "Done.";
       setMessages((m) => [...m, { role: "aries", content: text }]);
-      speak(text, talkBack);
+      speak(text, talkBack, (m) => setNotice(m));
     } catch (e) {
       setMessages((m) => [...m, { role: "aries", content: `Sorry — ${e.message}` }]);
     }
@@ -461,6 +546,58 @@ export default function App() {
   function denyPcPlan() {
     setPcPlan(null);
     setMessages((m) => [...m, { role: "aries", content: "Okay — I didn't do anything." }]);
+  }
+
+  // The web wake-phrase listener. Its own function so the wake effect
+  // and the dictation pause/resume can both start one. Fatal errors
+  // (mic blocked, no mic) turn the toggle OFF and say so — the old
+  // code swallowed them (onerror = () => {}) and restarted in a
+  // silent loop. A 5-second guard stops one "Hey Aries" greeting
+  // twice on the interim results.
+  function startWakeRecognition() {
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR) {
+      setNotice("Wake phrase needs speech recognition, which this browser doesn't have.");
+      setWakeOn(false);
+      return;
+    }
+    const rec = new SR();
+    rec.lang = "en-US";
+    rec.continuous = true;
+    rec.interimResults = true;
+    let fatal = false;
+    rec.onresult = (e) => {
+      const said = Array.from(e.results).map((r) => r[0].transcript).join(" ").toLowerCase();
+      if (said.includes("hey aries")) {
+        const now = Date.now();
+        if (now - lastWakeAt.current < 5000) return;
+        lastWakeAt.current = now;
+        setMini(false);
+        const greet = "Aries active. Ready to cook.";
+        setMessages((m) => [...m, { role: "aries", content: greet }]);
+        speak(greet, true, (m) => setNotice(m));
+        setTimeout(startDictation, 900);
+      }
+    };
+    rec.onerror = (e) => {
+      if (e.error === "not-allowed" || e.error === "service-not-allowed") {
+        fatal = true;
+        setNotice("Microphone is blocked, so the wake phrase can't listen. Allow the microphone for this site, then turn the wake phrase back on.");
+        setWakeOn(false);
+      } else if (e.error === "audio-capture") {
+        fatal = true;
+        setNotice("No microphone was found on this device, so the wake phrase is off.");
+        setWakeOn(false);
+      }
+      // "no-speech" and "aborted" are routine — onend restarts below.
+    };
+    rec.onend = () => {
+      if (!fatal && wakeRef.current === rec) {
+        try { rec.start(); } catch { /* stopped */ }
+      }
+    };
+    wakeRef.current = rec;
+    try { rec.start(); } catch { /* ignore */ }
   }
 
   function startDictation() {
@@ -498,6 +635,26 @@ export default function App() {
       setNotice("This browser has no speech recognition. Use your keyboard's mic key instead — it dictates straight into the box.");
       return;
     }
+    // Don't start a second recognition while one is already running —
+    // Chrome throws and the tap silently does nothing.
+    if (listening) return;
+    // The wake phrase holds a recognition open; starting dictation
+    // while it listens throws "recognition already started" and both
+    // go silent. Pause the wake listener and resume it when dictation
+    // ends (once, whether it ended cleanly or with an error, and only
+    // if the wake phrase is still switched on).
+    const resumeWake = wakeOn && wakeRef.current;
+    if (resumeWake) {
+      try { wakeRef.current.stop(); } catch { /* ignore */ }
+      wakeRef.current = null;
+    }
+    let wakeResumed = false;
+    const maybeResumeWake = () => {
+      if (resumeWake && !wakeResumed && wakeOnRef.current) {
+        wakeResumed = true;
+        startWakeRecognition();
+      }
+    };
     const rec = new SR();
     rec.lang = "en-US";
     rec.interimResults = false;
@@ -508,15 +665,25 @@ export default function App() {
     };
     rec.onerror = (e) => {
       setListening(false);
+      setFaceState("idle");
+      setStatus("READY");
       if (e.error === "not-allowed") {
         setNotice("Microphone is blocked for this site. In Chrome: lock/tune icon → Site settings → Microphone → Allow, then reload. Or use your keyboard's mic key.");
       } else if (e.error === "no-speech") {
         setNotice("Didn't catch that — try again.");
+      } else if (e.error === "aborted") {
+        // Started over by something else — no need to alarm anyone.
       } else {
         setNotice(`Mic error: ${e.error}. Typing works as normal.`);
       }
+      maybeResumeWake();
     };
-    rec.onend = () => setListening(false);
+    rec.onend = () => {
+      setListening(false);
+      setFaceState("idle");
+      setStatus("READY");
+      maybeResumeWake();
+    };
     try {
       rec.start();
       setListening(true);
@@ -524,6 +691,10 @@ export default function App() {
       setStatus("LISTENING");
     } catch {
       setListening(false);
+      setFaceState("idle");
+      setStatus("READY");
+      setNotice("The microphone wouldn't start — try again in a moment.");
+      maybeResumeWake();
     }
   }
 
@@ -549,7 +720,7 @@ export default function App() {
                 setMini(false);
                 const greet = "Aries active. Ready to cook.";
                 setMessages((m) => [...m, { role: "aries", content: greet }]);
-                speak(greet, true);
+                speak(greet, true, (m) => setNotice(m));
                 setTimeout(startDictation, 900);
               }
             } catch { /* service down — keep polling quietly */ }
@@ -568,36 +739,9 @@ export default function App() {
         local.wakeStop().catch(() => {});
       };
     }
-    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SR) {
-      setNotice("Wake phrase needs speech recognition, which this browser doesn't have.");
-      setWakeOn(false);
-      return;
-    }
-    const rec = new SR();
-    rec.lang = "en-US";
-    rec.continuous = true;
-    rec.interimResults = true;
-    rec.onresult = (e) => {
-      const said = Array.from(e.results).map((r) => r[0].transcript).join(" ").toLowerCase();
-      if (said.includes("hey aries")) {
-        setMini(false);
-        const greet = "Aries active. Ready to cook.";
-        setMessages((m) => [...m, { role: "aries", content: greet }]);
-        speak(greet, true);
-        setTimeout(startDictation, 900);
-      }
-    };
-    rec.onerror = () => {};
-    rec.onend = () => {
-      if (wakeRef.current === rec) {
-        try { rec.start(); } catch { /* stopped */ }
-      }
-    };
-    wakeRef.current = rec;
-    try { rec.start(); } catch { /* ignore */ }
+    startWakeRecognition();
     return () => {
-      try { rec.stop(); } catch { /* ignore */ }
+      try { wakeRef.current?.stop?.(); } catch { /* ignore */ }
       wakeRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -608,6 +752,29 @@ export default function App() {
     setDue((d) => d.filter((t) => t.id !== task.id));
   }
 
+  // Nobody sees chat before signing in — the login screen gates the
+  // whole app. authReady says the token check has run, so a signed-in
+  // user never sees the login screen flash by.
+  if (!authReady) return <div className="aries-loading">ARIES — waking up…</div>;
+  if (error && !data && !user) {
+    return (
+      <div className="aries-error">
+        <h1>ARIES</h1>
+        <p>Could not reach the Aries server: {error}</p>
+        <p>Check the backend is running, then reload.</p>
+      </div>
+    );
+  }
+  if (!user) {
+    return (
+      <AuthScreen
+        onAuthed={(u) => {
+          setUser(u);
+          load();
+        }}
+      />
+    );
+  }
   if (error && !data) {
     return (
       <div className="aries-error">
@@ -692,6 +859,20 @@ export default function App() {
         </div>
       )}
 
+      {/* Mini mode: the face tap restores full size, and so does this
+          button — a second, obvious way back, so mini can never trap
+          the app again. */}
+      {mini && !locked && (
+        <button
+          className="expand-btn"
+          type="button"
+          onClick={() => setMini(false)}
+          aria-label="Return to full size"
+        >
+          ⤢ Full screen
+        </button>
+      )}
+
       {pcPlan && (
         <div className="perm-modal" role="dialog" aria-label="PC action confirmation">
           <div className="perm-card">
@@ -728,6 +909,8 @@ export default function App() {
       {showMore && (
         <MoreSheet
           data={data}
+          user={user}
+          onLogout={handleLogout}
           tab={moreTab}
           setTab={setMoreTab}
           onClose={() => { setShowMore(false); load(); }}
@@ -1082,7 +1265,205 @@ function DesktopSection() {
   );
 }
 
-function MoreSheet({ data, tab, setTab, onClose, useSearch, setUseSearch, talkBack, setTalkBack, wakeOn, setWakeOn, grain, setGrain, onBurst, elevenVoices, elevenConfigured, elevenDefaultId, elevenDefaultName }) {
+// Sign-in / sign-up gate: the whole app sits behind this until the
+// server confirms a token. Each account gets only its own data —
+// Epsilon signs in as "Epsilon" (the admin account, by username);
+// Kelfy makes her own account and sees only hers.
+function AuthScreen({ onAuthed }) {
+  const [mode, setMode] = useState("login");
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  async function submit(e) {
+    e.preventDefault();
+    if (!username.trim() || !password) { setErr("Enter a username and a password."); return; }
+    setErr("");
+    setBusy(true);
+    try {
+      const r = mode === "login"
+        ? await api.login(username.trim(), password)
+        : await api.register(username.trim(), password);
+      setToken(r.token);
+      onAuthed(r.user);
+    } catch (e2) {
+      setErr(e2.message);
+    }
+    setBusy(false);
+  }
+  return (
+    <div className="auth-screen">
+      <Face state="idle" label="Aries" />
+      <h1>ARIES</h1>
+      <p className="auth-sub">Sign in to your own Aries. Your chats, memories and tasks are yours alone.</p>
+      <form onSubmit={submit}>
+        <input
+          value={username}
+          onChange={(e) => setUsername(e.target.value)}
+          placeholder="Username"
+          autoComplete="username"
+          aria-label="Username"
+        />
+        <input
+          type="password"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          placeholder="Password"
+          autoComplete={mode === "login" ? "current-password" : "new-password"}
+          aria-label="Password"
+        />
+        {err && <p className="notice">{err}</p>}
+        <button className="auth-btn" type="submit" disabled={busy}>
+          {busy ? "…" : mode === "login" ? "Sign in" : "Create account"}
+        </button>
+      </form>
+      <button
+        type="button"
+        className="link-btn"
+        onClick={() => { setMode(mode === "login" ? "signup" : "login"); setErr(""); }}
+      >
+        {mode === "login" ? "No account yet? Create one" : "Already have an account? Sign in"}
+      </button>
+      <p className="fine">Epsilon signs in as “Epsilon” — that account is the admin, no matter when it was created.</p>
+    </div>
+  );
+}
+
+// Admin panel (Settings → More): only the account holding the admin
+// username sees this. Lists every account; deleting one removes the
+// account and all of its chats, memories, tasks and profile. The
+// admin account itself can't be deleted from here.
+function AdminPanel() {
+  const [users, setUsers] = useState(null);
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(false);
+  const loadUsers = useCallback(async () => {
+    try {
+      setErr("");
+      setUsers((await api.adminUsers()).users || []);
+    } catch (e) {
+      setErr(e.message || "Could not load users.");
+    }
+  }, []);
+  useEffect(() => { loadUsers(); }, [loadUsers]);
+  async function remove(username) {
+    if (!confirm(`Delete ${username}'s account? Their chats, memories and tasks go with it. This can't be undone.`)) return;
+    setBusy(true);
+    try {
+      await api.adminDeleteUser(username);
+      await loadUsers();
+    } catch (e) { setErr(e.message); }
+    setBusy(false);
+  }
+  return (
+    <section>
+      <h3>Admin — accounts</h3>
+      <p className="fine">Everyone gets their own account and their own data. Only “Epsilon” is admin — by username, not by who signed up first.</p>
+      {err && <p className="notice">{err}</p>}
+      {!users && !err && <p className="fine">Loading…</p>}
+      <ul className="user-list">
+        {(users || []).map((u) => (
+          <li key={u.username}>
+            <span><strong>{u.username}</strong> — {u.role}{u.created_at ? ` · since ${new Date(u.created_at).toLocaleDateString()}` : ""}</span>
+            {u.role !== "admin" && (
+              <button disabled={busy} onClick={() => remove(u.username)}>Delete</button>
+            )}
+          </li>
+        ))}
+      </ul>
+      <button disabled={busy} onClick={loadUsers}>Refresh</button>
+    </section>
+  );
+}
+
+// Voice self-test (Settings → Aries): checks each voice path one by
+// one and says plainly what works and what doesn't, instead of
+// leaving the user guessing why the mic or talk-back is quiet. The
+// microphone test asks the browser for the mic — that prompt is the
+// test, and the stream is stopped straight away.
+function VoiceSelfTest({ elevenConfigured, elevenDefaultName }) {
+  const [results, setResults] = useState(null);
+  const [running, setRunning] = useState(false);
+
+  async function run() {
+    setRunning(true);
+    const r = {};
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    r.recognition = SR
+      ? { ok: true, text: "Speech recognition is available in this browser — dictation and the wake phrase can work." }
+      : { ok: false, text: "No speech recognition in this browser — dictation and the wake phrase can't work here. Chrome on Android or desktop works; the Muse preview frame does not." };
+    try {
+      if (navigator.permissions?.query) {
+        const st = await navigator.permissions.query({ name: "microphone" });
+        r.mic = st.state === "granted"
+          ? { ok: true, text: "Microphone permission: granted." }
+          : st.state === "denied"
+            ? { ok: false, text: "Microphone permission: blocked for this site. Allow it in the browser's site settings, then test again." }
+            : { ok: null, text: "Microphone permission: not decided yet — the mic test below will ask." };
+      } else {
+        r.mic = { ok: null, text: "This browser doesn't report microphone permission — the mic test below will tell you." };
+      }
+    } catch {
+      r.mic = { ok: null, text: "Microphone permission couldn't be checked in this browser." };
+    }
+    try {
+      if (navigator.mediaDevices?.getUserMedia) {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        stream.getTracks().forEach((t) => t.stop());
+        r.micLive = { ok: true, text: "Microphone test: the mic opened fine — Aries can hear you." };
+      } else {
+        r.micLive = { ok: false, text: "Microphone test: this browser gives no microphone access." };
+      }
+    } catch (e) {
+      r.micLive = {
+        ok: false,
+        text: e?.name === "NotAllowedError"
+          ? "Microphone test: blocked. Allow the microphone for this site in the browser's site settings, then test again."
+          : `Microphone test failed: ${e?.name || "unknown error"}.`,
+      };
+    }
+    try {
+      const vs = ("speechSynthesis" in window) ? window.speechSynthesis.getVoices() || [] : [];
+      const en = vs.filter((v) => /^en/i.test(v.lang || ""));
+      r.voices = vs.length
+        ? { ok: true, text: `Talk-back voices: ${en.length} English voice(s) on this device (${vs.length} total).` }
+        : { ok: false, text: "Talk-back voices: none loaded yet — close Settings and reopen it; voices load a moment after the page opens." };
+    } catch {
+      r.voices = { ok: false, text: "Talk-back voices: speech synthesis isn't available in this browser." };
+    }
+    r.eleven = elevenConfigured
+      ? { ok: true, text: `ElevenLabs voice: set up — Aries talks back with ${elevenDefaultName || "Adam"}.` }
+      : { ok: false, text: "ElevenLabs voice: not set up on the server — talk-back uses the device's voices." };
+    setResults(r);
+    setRunning(false);
+  }
+
+  const rows = results ? [
+    ["Speech recognition", results.recognition],
+    ["Microphone permission", results.mic],
+    ["Microphone test", results.micLive],
+    ["Talk-back voices", results.voices],
+    ["ElevenLabs voice", results.eleven],
+  ] : [];
+
+  return (
+    <div className="voice-test">
+      <h3>Voice self-test</h3>
+      <p className="fine">Checks each voice path and says plainly what works. The microphone test asks the browser for the mic — that prompt is the test.</p>
+      <button disabled={running} onClick={run}>{running ? "Testing…" : "Run voice test"}</button>
+      {rows.map(([label, res]) => (
+        <p key={label} className="test-row">
+          <span className={res.ok === true ? "ok" : res.ok === false ? "bad" : ""}>
+            {res.ok === true ? "✓ " : res.ok === false ? "✗ " : "• "}
+          </span>
+          <span><strong>{label}:</strong> {res.text}</span>
+        </p>
+      ))}
+    </div>
+  );
+}
+
+function MoreSheet({ data, user, onLogout, tab, setTab, onClose, useSearch, setUseSearch, talkBack, setTalkBack, wakeOn, setWakeOn, grain, setGrain, onBurst, elevenVoices, elevenConfigured, elevenDefaultId, elevenDefaultName }) {
   const [person, setPerson] = useState(data.personality);
   const [profile, setProfile] = useState(data.profile);
   const [memText, setMemText] = useState("");
@@ -1203,6 +1584,7 @@ function MoreSheet({ data, tab, setTab, onClose, useSearch, setUseSearch, talkBa
             </button>
           </div>
           <p className="fine">Talk back reads Aries' replies aloud. Wake phrase listens for “Hey Aries”. Search the web grounds the next answer in live results.</p>
+          <VoiceSelfTest elevenConfigured={elevenConfigured} elevenDefaultName={elevenDefaultName} />
         </section>
       )}
 
@@ -1251,6 +1633,12 @@ function MoreSheet({ data, tab, setTab, onClose, useSearch, setUseSearch, talkBa
 
       {tab === "more" && (
         <>
+        <section>
+          <h3>Account</h3>
+          <p>Signed in as <strong>{user?.username}</strong>{user?.role === "admin" ? " — admin" : ""}. Your chats, memories and tasks are yours alone.</p>
+          <button onClick={onLogout}>Log out</button>
+        </section>
+        {user?.role === "admin" && <AdminPanel />}
         <section>
           <h3>Veil</h3>
           <p className="fine">The veil is the dithered grain over the mountains. Tap the veil itself for a burst, or use these.</p>

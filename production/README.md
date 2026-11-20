@@ -1,164 +1,162 @@
-# Aries — production webapp (Render-deployable)
+# Aries — production build
 
-Aries as a real product: a SaaS webapp with a personality and a stable
-database, not just a CLI wrapper for an NVIDIA model. One service on
-Render serves the React frontend and the FastAPI backend together.
+Private SaaS companion for Epsilon and Kelfy until it goes commercial.
+FastAPI backend + Vite React frontend, one Docker service on Render,
+deployed from this directory. Live site: https://aries-ahvo.onrender.com
 
-## Architecture (one service, on purpose)
-
-```
-browser ──► Render web service (Docker, single container)
-               ├── FastAPI backend  (/api/*)
-               │     ├── NVIDIA chat (Nemotron 3.5 Lightning, server-side key)
-               │     ├── memory vault, personality, tasks, permissions
-               │     ├── DuckDuckGo web search (no Google scraping)
-               │     ├── screenshot description (optional vision model)
-               │     └── face login (OpenCV LBPH + PIN fallback)
-               ├── SQLite (local) or Render Postgres (DATABASE_URL)
-               └── built React frontend (DitherVeil hero, visor face, mini mode)
-```
-
-One service instead of two because it removes CORS, removes a second
-service to keep awake on the free tier, and keeps the API and the app
-on the same origin. If traffic ever outgrows it, split the frontend
-into a Render static site and point `VITE_API_URL` at the API service.
-
-## What is in this build
-
-- **Chat** with the NVIDIA model, personality-driven system prompt
-  (Companion / Mentor / Hype / Calm + warmth / directness / humour
-  sliders + character notes), and keyword memory recall.
-- **Memory vault** — teach, pin, edit (via delete + re-add), filter,
-  forget; chat-learned facts are held **pending approval**.
-- **Web search** (DuckDuckGo only) — explicit globe toggle or a
-  question that needs fresh info; replies grounded in results with
-  named, linked sources; honest when search fails.
-- **Permissions** — Ask / Always / Never per capability, enforced
-  **server-side** (`never` hard-blocks; `ask` needs per-request consent).
-- **Tasks & reminders** — chat ("remind me to … tomorrow at 9am")
-  or the Tasks panel; due tasks surface via `/api/tasks/due`.
-- **Voice** — browser dictation (SpeechRecognition), talk-back via
-  speech synthesis, "Hey Aries" wake phrase. All client-side; see the
-  mic note below.
-- **Face login** — OpenCV LBPH enrollment/verification (the spec's
-  fallback when dlib will not build) + unlock PIN (SHA-256 hash only).
-  A convenience lock, not biometric-grade security.
-- **Screenshot description** — upload an image; described by the
-  vision model **only if `VISION_MODEL` is set and live**. Otherwise
-  it says so honestly and gives image metadata instead of inventing
-  a description. (Vision model `meta/llama-3.2-11b-vision-instruct`
-  is UNCONFIRMED on NVIDIA hosting as of 2026-11-18.)
-- **Setup wizard** — first launch: who you are → voice →
-  permission defaults. No API-key step on purpose: the key is
-  server-side only.
-- **First view** — small floating composer + mic, face first;
-  everything else (personality, memory, tasks, permissions, face,
-  screenshot, history, installer) lives in Settings / More.
-- **Mini mode** — tap the face: floating bottom-right panel with
-  face, composer, mic, talk-back and wake toggles.
-
-## What is NOT in this build
-
-- **PC control** — deliberately excluded. No pyautogui, no shell
-  execution, no mouse/keyboard control, no file execution on the
-  user's machine. That is the LAST roadmap item and lives in the
-  desktop PyQt app (`aries/` in the repo root), not in this webapp.
-- **Public sign-up / billing** — Aries is private to Epsilon and
-  a friend until commercial. There is a single household user
-  (`USER = "default"` in `server/app/main.py`). Add accounts before
-  opening it up.
-
-## Security rules
-
-- `NVIDIA_API_KEY` lives **only** in the Render dashboard
-  (Environment). Never in code, never in the repo, never in any
-  installer, never accepted from a client.
-- The frontend never sees the key. The backend never logs it.
-- Face data (LBPH model) and the SQLite file live under
-  `server/data/` (gitignored). On Render, attach the Postgres DB
-  from `render.yaml` for durable data — the free web service disk
-  is ephemeral.
-
-## Deploy to Render (exact steps)
-
-1. Push this `production/` directory to the repo (see "Push" below).
-2. Render dashboard → **New → Blueprint** → connect the repo →
-   select it. Render reads `production/render.yaml` and creates the
-   `aries` web service + `aries-db` Postgres database.
-   (If the blueprint path is not picked up, create the web service
-   manually: New → Web Service → Docker, root directory `production`,
-   Dockerfile `production/Dockerfile`.)
-3. **Before the first real chat:** in the service → **Environment**,
-   set `NVIDIA_API_KEY` to your NVIDIA key. (Render marks it
-   `sync: false` — it is not stored in the repo.)
-4. Deploy. Open the service URL → `/api/health` should return
-   `{"ok": true, ...}` with `key_configured: true`.
-5. First visit runs the setup wizard. Aries greets:
-   "Aries active. Ready to cook."
-
-## Run locally
+## Run it
 
 ```bash
-# backend
-cd production/server
-python3 -m venv /tmp/aries-venv && /tmp/aries-venv/bin/pip install -r requirements.txt
-cp ../.env.example ../.env   # then put a key in .env (local only, never commit)
- /tmp/aries-venv/bin/uvicorn app.main:app --reload --port 8000
+# Backend (needs NVIDIA_API_KEY in the environment for chat)
+cd server
+pip install -r requirements.txt
+uvicorn app.main:app --host 0.0.0.0 --port 8000
 
-# frontend (second terminal)
-cd production/web
+# Frontend (dev)
+cd web
 npm install
-npm run dev        # http://localhost:5173 (proxies /api to :8000)
-npm run build      # output: web/dist (served by the backend as server/static)
+npm run build   # the backend serves web/dist in production
 ```
 
-## Tests (run before pushing)
+Render deploys from `render.yaml` / `Dockerfile` in this directory.
+The NVIDIA key lives server-side only (Render env var
+`NVIDIA_API_KEY`) — never in code, never in the repo, never in chat.
 
-```bash
-cd production/server
-python3 -m venv /tmp/aries-venv && /tmp/aries-venv/bin/pip install -r requirements.txt
-/tmp/aries-venv/bin/uvicorn app.main:app --port 8000 &
-curl localhost:8000/api/health
-# chat with a DUMMY key: expect a clear 401-style error, never a real key
-NVIDIA_API_KEY=dummy-key-123 /tmp/aries-venv/bin/python - <<'EOF'
-import requests
-r = requests.post("http://localhost:8000/api/chat", json={"message": "hello"})
-print(r.status_code, r.json()["reply"][:120])
-EOF
-cd ../web && npm install && npm run build
-```
+## Accounts (2026-11-20)
 
-## Mic note (known limit)
+Everyone signs in with their own account and gets only their own
+chats, memories, tasks, profile, personality, permissions, face
+enrollment and connections. Kelfy must not use Epsilon's account.
 
-Dictation, talk-back and the wake phrase use the browser's speech
-services. In embedded webviews the frame may not delegate the
-microphone — the app then says so plainly and keyboard dictation
-(tap the message box, then the keyboard's mic key) is the fallback.
-Full mic support needs Aries open in its own browser tab.
+- **Tables:** `users` (username, bcrypt password hash, role,
+  created_at) and `sessions` (random token, user, 30-day expiry).
+  Passwords are bcrypt hashes only — never plaintext, never logged.
+- **Endpoints:** `POST /api/auth/register`, `POST /api/auth/login`,
+  `POST /api/auth/logout`, `GET /api/auth/me`. The frontend keeps the
+  session token in `localStorage` and sends it as
+  `Authorization: Bearer <token>` on every API call.
+- **Enforcement:** every data endpoint (chat, memories, tasks,
+  personality, permissions, face, screenshot, connections, TTS,
+  voices) requires a live session and is scoped to the signed-in
+  account's canonical username. No token → `401`. The OAuth callback
+  is the one exception — the provider redirects the browser with no
+  token, so the user is recovered from the OAuth state row created
+  when the connect flow started. The Connect button passes the token
+  as `?token=` on that same-origin URL only; it is never sent to
+  Google or Spotify.
 
-## File map
+### Who is admin — by username, NOT by signup order
 
-```
-production/
-├── Dockerfile            # multi-stage: Node builds web, Python serves all
-├── render.yaml           # Render blueprint: 1 web service + Postgres
-├── .env.example          # placeholders only, never real secrets
-├── README.md             # this file
-├── server/
-│   ├── requirements.txt
-│   └── app/
-│       ├── main.py       # FastAPI app: all /api routes + static serving
-│       ├── db.py         # SQLAlchemy models (SQLite ↔ Postgres)
-│       ├── llm.py        # NVIDIA client (env key only)
-│       ├── personality.py# voice presets + sliders → system prompt
-│       ├── search.py     # DuckDuckGo search (ddgs, Lite fallback)
-│       ├── permissions.py# server-side permission enforcement
-│       └── face.py       # OpenCV LBPH enrollment / verification
-└── web/                  # Vite + React 18 (DitherVeil hero base kept)
-    ├── src/
-    │   ├── App.jsx       # hero, composer, mini mode, Settings/More, wizard
-    │   ├── Face.jsx      # machine visor face (light/motion only)
-    │   ├── DitherVeil.jsx# React Bits veil (from the showcase build)
-    │   └── api.js        # backend client
-    └── vite.config.js    # dev proxy /api → :8000
-```
+Epsilon corrected this on 2026-11-20: the "first account created
+becomes admin" idea is **rejected and not built**. The rule is:
+
+- Admin status belongs to the account holding the admin username:
+  env `ARIES_ADMIN_USERNAME`, default **`epsilon`**, compared
+  case-insensitively. Whoever holds that username is admin on **every
+  login** — first, last, or middle. If Kelfy signs up first she is a
+  normal user; when Epsilon signs up later as "Epsilon", he is admin.
+- The admin username is unique — only one account can hold it
+  (usernames are unique case-insensitively), so nobody else can take
+  it. The admin account cannot be deleted from the admin panel.
+- Admin endpoints: `GET /api/admin/users` (list accounts),
+  `DELETE /api/admin/users/{username}` (deletes the account **and**
+  all of its data). Both return `403` for non-admins. The Admin panel
+  in Settings → More is visible only to the admin account.
+- The stored `role` on the user row is re-derived from the username
+  at every login, so changing `ARIES_ADMIN_USERNAME` takes effect
+  without a data migration.
+
+### Migration from the pre-accounts build
+
+Before accounts, every row belonged to `user_key = "default"` — that
+was Epsilon's data. The first time the **admin** account registers or
+logs in, those rows are claimed for the admin username
+(`auth.claim_default_data`, idempotent — later logins move zero rows).
+The face-model folder `data/faces/default/` is renamed to the admin's
+folder at the same time, so an enrolled face keeps working. A
+non-admin registering first claims nothing: the data waits for
+Epsilon's account.
+
+**First-signup order after deploy:** Epsilon signs up first as
+`Epsilon` (becomes admin, keeps his existing memories/tasks), then
+Kelfy signs up as `Kelfy` (fresh, empty account).
+
+## Mini mode (fixed 2026-11-20)
+
+Bug: after switching to mini mode, the app could not be restored to
+full screen. Root cause, found by reading the layout (no MiniPanel
+or Expand button existed): in mini mode the greeting was only faded
+out (`opacity: 0`) — it still occupied ~170px of the flex column —
+and the latest reply stayed in the column too. With a long reply the
+column grew taller than the viewport, the face was pushed off the top
+of the screen, and `body { overflow: hidden }` meant no scrolling
+could bring it back. In the desktop shell the same tap was also
+swallowed because the face was a `-webkit-app-region: drag` region.
+
+Fix:
+- In mini mode the greeting, latest reply, hint and due-card are
+  removed from the layout (`display: none`), so the column is only
+  the face and always fits on screen.
+- A visible **⤢ Full screen** button appears in mini mode, next to
+  the face tap, as a second way back.
+- Desktop shell: the face is `-webkit-app-region: no-drag` (the stage
+  around it stays the drag area), so the tap restores the window.
+- `touch-action: manipulation` on the face button.
+
+The veil pointer-reveal/burst behaviour is untouched.
+
+## Voice (fixed 2026-11-20)
+
+Bugs found by auditing every voice path in `web/src/App.jsx`:
+
+1. **Talk-back went silent after `cancel()`.** `speakBrowser`
+   called `speechSynthesis.cancel()` then `speak()` immediately —
+   Chrome drops a `speak()` that follows `cancel()` too closely,
+   with no error. Now the utterance is spoken ~90ms after the
+   cancel, guarded by a generation counter so a newer reply wins.
+2. **Autoplay blocks were silent.** ElevenLabs `Audio.play()` can
+   reject with `NotAllowedError` before the user has interacted with
+   the page; the old code returned "didn't speak" and the browser
+   fallback failed the same way, quietly. Now that case reports a
+   plain notice ("the browser blocks sound until you tap something")
+   instead of falling back.
+3. **Wake-phrase errors were swallowed.** `rec.onerror = () => {}`
+   hid `not-allowed` (mic blocked) and the `onend` handler restarted
+   the listener in a silent loop. Fatal errors now turn the toggle
+   off and say why; routine errors (`no-speech`, `aborted`) still
+   restart. A 5-second guard stops one "Hey Aries" greeting twice.
+4. **Dictation collided with the wake listener.** Starting a second
+   `SpeechRecognition` while the wake one is live throws and both go
+   silent. Dictation now pauses the wake listener and resumes it
+   once when dictation ends (only if the wake phrase is still on).
+   Tapping the mic while already listening is ignored instead of
+   throwing.
+5. **Utterance errors were silent.** `SpeechSynthesisUtterance`
+   errors are now surfaced as a visible notice.
+
+**Voice self-test** (Settings → Aries → "Run voice test") checks,
+one by one: speech-recognition availability, microphone permission
+state, a live microphone open test (`getUserMedia`, stream stopped
+immediately), speech-synthesis voices on the device, and ElevenLabs
+status — each reported plainly (✓ / ✗ / • with words).
+
+Note: this is about the standalone site in its own tab, where the
+mic can work. The embedded Muse preview frame cannot reach the
+microphone — nothing here sends the user to browser settings for
+that.
+
+## Design (standing decisions)
+
+- Deep-purple theme, baked-grain veil, exact machine visor face.
+  Main view is only chat + mic + gear; everything else is in
+  Settings (3 tabs: Aries, Memory, More).
+- Greeting "Aries active. Ready to cook." is one-time-only on
+  wake-up; the backend strips it from replies deterministically.
+- Permissions enforced server-side (Allow once / always / Deny;
+  "Never" hard-blocks; chat-learned memories wait for approval).
+- No PC control in the webapp — that is desktop-only, the last
+  roadmap item. The desktop shell (Electron 0.7.0, separate tree)
+  bundles this same React app locally with a local Python sidecar.
+- `production/MEMORY.md` is a redacted placeholder ("User memory is
+  stored in the private vault"), so it is safe to include in prompts.
+  Real memories live in the Postgres vault, per account.

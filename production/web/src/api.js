@@ -10,9 +10,30 @@ const DESK =
 export const isDesktop = !!DESK;
 const BASE = DESK ? DESK.cloudApi : import.meta.env.VITE_API_URL || "";
 
+// Accounts: the session token lives in localStorage and rides on
+// every API call as Authorization: Bearer. The server rejects any
+// data call without a live token (401) and scopes every row to the
+// signed-in account — Epsilon's chats and memories are his, Kelfy's
+// are hers. OAuth connect opens a new tab, which cannot send a
+// header, so the token travels as ?token= on that one same-origin
+// URL only — it is never forwarded to Google or Spotify.
+export function getToken() {
+  try { return window.localStorage.getItem("ariesToken") || null; } catch { return null; }
+}
+export function setToken(token) {
+  try {
+    if (token) window.localStorage.setItem("ariesToken", token);
+    else window.localStorage.removeItem("ariesToken");
+  } catch { /* ignore */ }
+}
+function authHeaders() {
+  const t = getToken();
+  return t ? { Authorization: `Bearer ${t}` } : {};
+}
+
 async function call(path, opts = {}) {
   const res = await fetch(`${BASE}${path}`, {
-    headers: { "Content-Type": "application/json", ...(opts.headers || {}) },
+    headers: { "Content-Type": "application/json", ...authHeaders(), ...(opts.headers || {}) },
     ...opts,
   });
   const text = await res.text();
@@ -103,6 +124,18 @@ export const local = {
 
 export const api = {
   health: () => call("/api/health"),
+  // Accounts. register/login return {token, user}; the caller stores
+  // the token with setToken(). me() 401s when the token is dead.
+  register: (username, password) =>
+    call("/api/auth/register", { method: "POST", body: JSON.stringify({ username, password }) }),
+  login: (username, password) =>
+    call("/api/auth/login", { method: "POST", body: JSON.stringify({ username, password }) }),
+  logout: () => call("/api/auth/logout", { method: "POST", body: JSON.stringify({}) }),
+  me: () => call("/api/auth/me"),
+  // Admin only (the account holding the admin username).
+  adminUsers: () => call("/api/admin/users"),
+  adminDeleteUser: (username) =>
+    call(`/api/admin/users/${encodeURIComponent(username)}`, { method: "DELETE" }),
   state: () => call("/api/state"),
   // ElevenLabs voices on the server. 503 when the voice key is not set.
   voices: () => call("/api/voices"),
@@ -111,7 +144,7 @@ export const api = {
   tts: async (text, voiceId) => {
     const res = await fetch(`${BASE}/api/tts`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...authHeaders() },
       body: JSON.stringify({ text, voice_id: voiceId || undefined }),
     });
     if (!res.ok) {
@@ -151,12 +184,16 @@ export const api = {
   // Connections (Settings → Connections). Tokens never leave the server;
   // this only reports which services are connected and which account.
   connections: () => call("/api/connections"),
-  connectUrl: (service) => `${BASE}/api/connections/${service}/connect`,
+  // The connect page opens in a new tab (no Authorization header
+  // possible), so the session token rides as ?token= on this
+  // same-origin URL. The provider never sees it.
+  connectUrl: (service) =>
+    `${BASE}/api/connections/${service}/connect?token=${encodeURIComponent(getToken() || "")}`,
   disconnectConnection: (service) =>
     call(`/api/connections/${service}/disconnect`, { method: "POST" }),
   // Multipart endpoints use fetch directly (no JSON content-type).
   upload: async (path, form) => {
-    const res = await fetch(`${BASE}${path}`, { method: "POST", body: form });
+    const res = await fetch(`${BASE}${path}`, { method: "POST", headers: { ...authHeaders() }, body: form });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
       const err = new Error(data.detail || `Upload failed (${res.status})`);

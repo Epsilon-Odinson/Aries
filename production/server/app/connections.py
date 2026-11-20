@@ -125,15 +125,19 @@ def _callback_url(request: Request, service: str) -> str:
 # ---------------------------------------------------------------- state
 
 
-def _new_state(db: Session, service: str, redirect_uri: str) -> str:
+def _new_state(db: Session, service: str, redirect_uri: str, user_key: str = "") -> str:
     state = secrets.token_urlsafe(32)
-    db.add(OAuthState(service=service, state=state, redirect_uri=redirect_uri))
+    db.add(OAuthState(service=service, state=state, redirect_uri=redirect_uri, user_key=user_key))
     db.commit()
     return state
 
 
-def _consume_state(db: Session, service: str, state: str) -> str:
-    """Verify the state and return the redirect_uri it was created with."""
+def _consume_state(db: Session, service: str, state: str) -> tuple[str, str]:
+    """Verify the state; return (redirect_uri, user_key).
+
+    The callback is a plain browser redirect with no Bearer token,
+    so the user who started the flow is recovered from the state row.
+    """
     # Drop stale rows so the table does not grow.
     cutoff = datetime.utcnow() - timedelta(minutes=STATE_TTL_MINUTES)
     db.query(OAuthState).filter(OAuthState.created_at < cutoff).delete()
@@ -145,19 +149,19 @@ def _consume_state(db: Session, service: str, state: str) -> str:
     )
     if not row:
         raise ConnectionError("This sign-in link has expired or was already used. Start again from Settings → Connections.")
-    redirect_uri = row.redirect_uri
+    redirect_uri, user_key = row.redirect_uri, row.user_key or ""
     db.delete(row)
     db.commit()
-    return redirect_uri
+    return redirect_uri, user_key
 
 
 # ---------------------------------------------------------------- auth URLs
 
 
-def google_auth_url(db: Session, request: Request) -> str:
+def google_auth_url(db: Session, request: Request, user_key: str = "") -> str:
     cid, _ = _google_client()
     redirect_uri = _callback_url(request, "google")
-    state = _new_state(db, "google", redirect_uri)
+    state = _new_state(db, "google", redirect_uri, user_key)
     params = {
         "client_id": cid,
         "redirect_uri": redirect_uri,
@@ -171,10 +175,10 @@ def google_auth_url(db: Session, request: Request) -> str:
     return f"{GOOGLE_AUTH_URL}?{urlencode(params)}"
 
 
-def spotify_auth_url(db: Session, request: Request) -> str:
+def spotify_auth_url(db: Session, request: Request, user_key: str = "") -> str:
     cid, _ = _spotify_client()
     redirect_uri = _callback_url(request, "spotify")
-    state = _new_state(db, "spotify", redirect_uri)
+    state = _new_state(db, "spotify", redirect_uri, user_key)
     params = {
         "client_id": cid,
         "redirect_uri": redirect_uri,
@@ -270,7 +274,9 @@ def _spotify_account_label(access_token: str) -> str:
 
 def handle_google_callback(db: Session, request: Request, code: str, state: str) -> str:
     cid, secret = _google_client()
-    redirect_uri = _consume_state(db, "google", state)
+    redirect_uri, user_key = _consume_state(db, "google", state)
+    if not user_key:
+        raise ConnectionError("This sign-in was started before accounts — sign in to Aries and try again.")
     token = _post_token(
         GOOGLE_TOKEN_URL,
         {
@@ -282,13 +288,15 @@ def handle_google_callback(db: Session, request: Request, code: str, state: str)
         },
     )
     label = _google_account_email(token.get("access_token", ""))
-    _store_tokens(db, "default", "google", token, label)
+    _store_tokens(db, user_key, "google", token, label)
     return label
 
 
 def handle_spotify_callback(db: Session, request: Request, code: str, state: str) -> str:
     cid, secret = _spotify_client()
-    redirect_uri = _consume_state(db, "spotify", state)
+    redirect_uri, user_key = _consume_state(db, "spotify", state)
+    if not user_key:
+        raise ConnectionError("This sign-in was started before accounts — sign in to Aries and try again.")
     basic = base64.b64encode(f"{cid}:{secret}".encode()).decode()
     token = _post_token(
         SPOTIFY_TOKEN_URL,
@@ -300,7 +308,7 @@ def handle_spotify_callback(db: Session, request: Request, code: str, state: str
         headers={"Authorization": f"Basic {basic}"},
     )
     label = _spotify_account_label(token.get("access_token", ""))
-    _store_tokens(db, "default", "spotify", token, label)
+    _store_tokens(db, user_key, "spotify", token, label)
     return label
 
 
