@@ -1,22 +1,37 @@
-# Build the Aries desktop app 0.8.0 (Electron shell + Python sidecar)
+# Build the Aries desktop app 0.9.0 (Electron shell + Python sidecar)
 # and publish the installer + portable app as GitHub Release assets.
 #
-# Trigger it by pushing a tag like v0.8.0-desktop, or by hand from the
+# THIS FILE IS A STAGING COPY — workflow files cannot be snapshot-
+# pushed. The parent applies it through the GitHub web UI (edit
+# .github/workflows/build-windows.yml, paste this content, commit
+# to main), then creates the tag v0.9.0-desktop to trigger it.
+# It is identical to .github/workflows/build-windows.yml except for
+# the 0.9.0 version strings, the 0.9.0 release notes, and the
+# extended smoke test (version assert + study-route check).
+#
+# Trigger it by pushing a tag like v0.9.0-desktop, or by hand from the
 # Actions tab (workflow_dispatch). The installer (Aries-Setup.exe,
 # electron-builder NSIS) installs Aries, offers a desktop shortcut
 # and a taskbar pin. Aries.exe is the portable single file.
 #
-# 0.8.0: the PC app is self-contained — the sidecar runs the FULL
-# production backend on the PC (chat, memory, tasks, voice, face,
-# screenshot — the same FastAPI app the website runs), against a
-# local SQLite database in %USERPROFILE%\.aries. The cloud is only a
-# fallback when the local service is down. No API key is needed on
-# first run if the user switches to the cloud; on this PC the engine
-# key lives in the Windows Credential Manager (Settings → More →
-# Desktop). PC control is off by default — turn it on in Settings,
-# and add the NVIDIA engine key there for chat and PC actions.
-# Mini mode: press the face to shrink to the floating face, press it
-# again (or the Full screen button) to come back to full size.
+# 0.9.0: the desktop catches up with everything the website gained
+# since 0.8.0 — same bundled React app and same bundled server, so
+# the PC app now has the viewport fix, memory import, per-user soul,
+# issue reporting, auto-learn + per-user memory file + always-on
+# search, the login info button, the "bro" greeting fix, the
+# account-name + brevity rules, and the Teacher skill (Study tab:
+# slide upload, Anki maker, quiz mode, summarizer, exam countdown,
+# audio lessons). The sidecar bundles python-pptx + pypdf so slide
+# uploads work on the PC. The app stays self-contained — the sidecar
+# runs the FULL production backend on the PC against a local SQLite
+# database in %USERPROFILE%\.aries. The cloud is only a fallback
+# when the local service is down. No API key is needed on first run
+# if the user switches to the cloud; on this PC the engine key lives
+# in the Windows Credential Manager (Settings → More → Desktop). PC
+# control is off by default — turn it on in Settings, and add the
+# NVIDIA engine key there for chat and PC actions. Mini mode: press
+# the face to shrink to the floating face, press it again (or the
+# Full screen button) to come back to full size.
 #
 # The release step only runs for tag pushes. A manual dispatch just
 # builds and uploads the files as workflow artifacts. The release
@@ -73,6 +88,15 @@ jobs:
           Copy-Item dist\aries-service.exe aries-shell\sidecar\aries-service.exe
 
       - name: Smoke-test the sidecar (local backend)
+        # Start the built exe, find its port on stdout, and check both
+        # health endpoints answer: /health (local backend, version
+        # 0.9.0) and /api/health (the production API, running on the
+        # PC). Also check a Teacher-skill route answers 401 without a
+        # token — that proves the study endpoints are registered in
+        # the frozen bundle (a missing route would 404). Catches a
+        # broken bundle (missing prod_server, missing dependency)
+        # before the installer is built. No key is set on the runner,
+        # so key_configured is false — that is expected here.
         run: |
           $proc = Start-Process -FilePath "dist\aries-service.exe" -ArgumentList "--port","0" -RedirectStandardOutput "sidecar-smoke.log" -RedirectStandardError "sidecar-smoke-err.log" -PassThru -WindowStyle Hidden
           try {
@@ -87,9 +111,12 @@ jobs:
             if (-not $port) { Get-Content sidecar-smoke.log, sidecar-smoke-err.log -ErrorAction SilentlyContinue | Select-Object -Last 40; throw "sidecar did not print its port" }
             $h = Invoke-RestMethod "http://127.0.0.1:$port/health"
             if (-not $h.ok -or $h.backend -ne "local") { throw "local /health bad: $($h | ConvertTo-Json -Compress)" }
+            if ($h.version -ne "0.9.0") { throw "local /health version bad: $($h.version) (expected 0.9.0)" }
             $ah = Invoke-RestMethod "http://127.0.0.1:$port/api/health"
             if (-not $ah.ok) { throw "local /api/health bad" }
-            Write-Host "Sidecar smoke test passed on port $port (local backend $($h.version), api $($ah.version), db $($h.db))"
+            $studyCode = & curl.exe -s -o NUL -w "%{http_code}" "http://127.0.0.1:$port/api/study"
+            if ($studyCode -ne "401") { throw "study route bad: /api/study answered $studyCode without a token (expected 401, 404 means the routes are missing from the bundle)" }
+            Write-Host "Sidecar smoke test passed on port $port (local backend $($h.version), api $($ah.version), db $($h.db), study routes registered)"
           } finally {
             Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
           }
@@ -125,7 +152,7 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         run: |
           $tag = "${{ github.ref_name }}"
-          $notes = "Windows build of the Aries desktop app (0.8.0) — the Electron shell. The same React app as the website, bundled locally into a real installed PC program (never the live site in a window), so the desktop is pixel-identical to the web: same veil, same pointer orb, same fonts, same Settings. NEW in 0.8.0: the PC app is self-contained — the local service runs the full backend on your PC (chat, memory, tasks, voice, face login, screenshot), so it works without the live website; the cloud is only a fallback. Your chats and memories on the PC live on the PC. Everyone gets their own login: Epsilon (username Epsilon) is the admin, Kelfy makes her own account and sees only hers. Aries-Setup.exe is the installer — it installs Aries, offers a desktop shortcut and a taskbar pin. Aries.exe is the portable single file — download and run it, no install needed. Add the NVIDIA engine key in Settings → More → Desktop (saved to the Windows Credential Manager) for chat and PC actions, or switch the engine to Cloud there to use the website's backend instead. PC control is off by default — turn it on in Settings. Mini mode: press the face to shrink to the floating face, press it again (or the Full screen button) to come back to full size."
+          $notes = "Windows build of the Aries desktop app (0.9.0) — the Electron shell. The same React app as the website, bundled locally into a real installed PC program (never the live site in a window), so the desktop is pixel-identical to the web: same veil, same pointer orb, same fonts, same Settings. NEW in 0.9.0: the desktop catches up with everything the website gained since 0.8.0 — viewport fix, memory import, per-user soul ('How Aries is for you'), issue reporting, auto-learn + per-user memory file + always-on search, the login info button, the 'bro' greeting fix, the account-name + brevity rules, and the Teacher skill (Study tab: slide/handout upload, Anki maker, quiz mode, summarizer, exam countdown, audio lessons). The sidecar now bundles python-pptx + pypdf so slide uploads work on the PC. The PC app stays self-contained — the local service runs the full backend on your PC (chat, memory, tasks, voice, face login, screenshot), so it works without the live website; the cloud is only a fallback. Your chats and memories on the PC live on the PC. Everyone gets their own login: Epsilon (username Epsilon) is the admin, Kelfy makes her own account and sees only hers. Aries-Setup.exe is the installer — it installs Aries, offers a desktop shortcut and a taskbar pin. Aries.exe is the portable single file — download and run it, no install needed. Add the NVIDIA engine key in Settings → More → Desktop (saved to the Windows Credential Manager) for chat and PC actions, or switch the engine to Cloud there to use the website's backend instead. PC control is off by default — turn it on in Settings. Mini mode: press the face to shrink to the floating face, press it again (or the Full screen button) to come back to full size."
           gh release view $tag --json tagName -q .tagName 2>$null | Out-Null
           if ($LASTEXITCODE -eq 0) {
             gh release upload $tag "aries-shell/dist-installer/Aries.exe" "aries-shell/dist-installer/Aries-Setup.exe" --clobber
