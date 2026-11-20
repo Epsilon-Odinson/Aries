@@ -10,6 +10,7 @@ and the day-to-day memories recalled from the database.
 from __future__ import annotations
 
 import re
+from datetime import datetime, timezone
 from pathlib import Path
 
 # SOUL.md and MEMORY.md live in the server directory (the directory
@@ -120,6 +121,19 @@ def build_system_prompt(
 ) -> str:
     """Build the system prompt for one chat turn."""
     parts = []
+    # The model has no clock of its own: without this line it cannot know
+    # today's date, even though it has web search. Give it the date and
+    # time on every turn, in UTC and in Ghana time (UTC+0, no DST).
+    now_utc = datetime.now(timezone.utc)
+    parts.append(
+        "Today is "
+        + now_utc.strftime("%A %d %B %Y")
+        + ". The current time is "
+        + now_utc.strftime("%H:%M")
+        + " UTC, which is the same time in Ghana (Africa/Accra). "
+        + "You know the current date and time — never say you do not, "
+        "and never ask the user what month or year it is."
+    )
     if SOUL_TEXT:
         parts.append(SOUL_TEXT)
     parts.append(VOICES.get(voice, VOICES["companion"]))
