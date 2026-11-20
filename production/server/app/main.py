@@ -279,6 +279,7 @@ def _personality_dict(db: Session, user_key: str) -> dict:
         "directness": row.directness,
         "humour": row.humour,
         "notes": row.notes,
+        "soul": row.soul or "",
     }
 
 
@@ -401,6 +402,11 @@ class PersonalityIn(BaseModel):
     directness: int = Field(60, ge=0, le=100)
     humour: int = Field(50, ge=0, le=100)
     notes: str = ""
+    # The user's own character text. None means "not sent" (leave the
+    # stored soul alone) — the SetupWizard posts without it, so it must
+    # never wipe a soul the user already wrote. "" clears it back to
+    # the shared default.
+    soul: str | None = None
 
 
 @app.post("/api/personality")
@@ -414,6 +420,8 @@ def save_personality(body: PersonalityIn, db: Session = Depends(get_db), user_ke
         body.humour,
         body.notes,
     )
+    if body.soul is not None:
+        row.soul = body.soul[:8000]
     row.updated_at = datetime.utcnow()
     db.commit()
     return {"ok": True, "personality": _personality_dict(db, user_key)}
@@ -594,6 +602,7 @@ def chat_endpoint(body: ChatIn, db: Session = Depends(get_db), user_key: str = D
         notes=person["notes"],
         profile=_profile_dict(db, user_key),
         memories=_recall_memories(db, user_key, text),
+        soul=person["soul"],
     )
     history = [
         {

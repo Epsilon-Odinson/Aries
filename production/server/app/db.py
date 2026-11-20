@@ -95,6 +95,10 @@ class Personality(Base):
     directness = Column(Integer, default=60)
     humour = Column(Integer, default=50)
     notes = Column(Text, default="")
+    # The user's own character for Aries ("soul"). When set, it replaces
+    # the shared SOUL.md default for this account only; empty means the
+    # default. Every account gets its own Aries this way.
+    soul = Column(Text, default="")
     updated_at = Column(DateTime, default=datetime.utcnow)
 
 
@@ -206,8 +210,30 @@ class OAuthState(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
+def _ensure_personality_soul_column() -> None:
+    """Startup migration: add personality.soul if the table predates it.
+
+    ``Base.metadata.create_all`` only creates missing tables — it never
+    adds a column to an existing table. A database built by an older
+    build would otherwise lack the column and every personality read
+    would fail. ``ALTER TABLE ... ADD COLUMN`` with no default is the
+    same statement on SQLite and Postgres, and inspecting first makes
+    this a no-op once the column exists (fresh databases already have
+    it from create_all). Existing rows are untouched: the column is
+    nullable and reads as empty, i.e. the shared default character.
+    """
+    from sqlalchemy import inspect, text
+
+    columns = {c["name"] for c in inspect(engine).get_columns("personality")}
+    if "soul" in columns:
+        return
+    with engine.begin() as conn:
+        conn.execute(text("ALTER TABLE personality ADD COLUMN soul TEXT"))
+
+
 def init_db() -> None:
     Base.metadata.create_all(bind=engine)
+    _ensure_personality_soul_column()
 
 
 def get_db():

@@ -1552,6 +1552,12 @@ function MoreSheet({ data, user, onLogout, tab, setTab, onClose, useSearch, setU
     await api.savePersonality(person);
     setMsg("Personality saved.");
   }
+  async function resetSoul() {
+    const cleared = { ...person, soul: "" };
+    setPerson(cleared);
+    await api.savePersonality(cleared);
+    setMsg("Back to the usual Aries.");
+  }
   async function saveProfile() {
     await api.saveProfile(profile);
     setMsg("Profile saved.");
@@ -1623,7 +1629,14 @@ function MoreSheet({ data, user, onLogout, tab, setTab, onClose, useSearch, setU
             <textarea value={person.notes} onChange={(e) => setPerson({ ...person, notes: e.target.value })}
               placeholder="How should Aries act?" rows="3" />
           </label>
+          <h3>How Aries is for you</h3>
+          <p className="fine">This is your own Aries. Write here how you want Aries to be for you — how it talks, what it calls you, what matters to it. Leave it blank and you get the usual Aries. Nobody else sees what you write here.</p>
+          <label>Your Aries
+            <textarea value={person.soul || ""} onChange={(e) => setPerson({ ...person, soul: e.target.value })}
+              placeholder="e.g. Talk to me like a close friend. Call me by my name. Keep answers short unless I ask for more." rows="5" />
+          </label>
           <button onClick={savePerson}>Save personality</button>
+          <button onClick={resetSoul}>Reset to default</button>
           <h3>Profile</h3>
           <label>Name <input value={profile.name} onChange={(e) => setProfile({ ...profile, name: e.target.value })} /></label>
           <label>Call me <input value={profile.call_name} onChange={(e) => setProfile({ ...profile, call_name: e.target.value })} /></label>

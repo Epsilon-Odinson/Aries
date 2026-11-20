@@ -118,8 +118,16 @@ def build_system_prompt(
     notes: str = "",
     profile: dict | None = None,
     memories: list[str] | None = None,
+    soul: str | None = None,
 ) -> str:
-    """Build the system prompt for one chat turn."""
+    """Build the system prompt for one chat turn.
+
+    ``soul`` is the signed-in user's own character text. When it is
+    set, it replaces the shared SOUL.md default as the character
+    definition for that user only; when empty or missing, the shared
+    SOUL.md is used. Everything else — date, voice preset, sliders,
+    notes, profile, MEMORY.md, vault memories — is unchanged.
+    """
     parts = []
     # The model has no clock of its own: without this line it cannot know
     # today's date, even though it has web search. Give it the date and
@@ -134,7 +142,10 @@ def build_system_prompt(
         + "You know the current date and time — never say you do not, "
         "and never ask the user what month or year it is."
     )
-    if SOUL_TEXT:
+    own_soul = (soul or "").strip()
+    if own_soul:
+        parts.append(own_soul)
+    elif SOUL_TEXT:
         parts.append(SOUL_TEXT)
     parts.append(VOICES.get(voice, VOICES["companion"]))
     values = {"warmth": warmth, "directness": directness, "humour": humour}
