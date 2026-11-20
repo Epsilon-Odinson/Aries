@@ -1754,7 +1754,7 @@ function MoreSheet({ data, user, onLogout, tab, setTab, onClose, useSearch, setU
               </li>
             ))}
           </ul>
-          <p className="fine">Tip: in chat, say “remind me to call Kelfy tomorrow at 9am” and Aries saves it.</p>
+          <p className="fine">Tip: in chat, say “remind me to call Mum tomorrow at 9am” and Aries saves it.</p>
         </section>
 
         <section>

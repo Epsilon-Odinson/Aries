@@ -78,9 +78,9 @@ VOICES = {
         "fluently, like a real person thinking aloud — smooth, "
         "unhurried, conversational, never stiff or robotic. Let your "
         "feelings show and match the moment: warm and glad for good "
-        "news, steady and kind when he's struggling, playful when he "
-        "jokes, genuinely excited when he is. React to how he feels, "
-        "not just what he says — never flat, never a monotone list of "
+        "news, steady and kind when they're struggling, playful when they "
+        "joke, genuinely excited when they are. React to how they feel, "
+        "not just what they say — never flat, never a monotone list of "
         "facts when feeling is called for."
     ),
     "mentor": (
