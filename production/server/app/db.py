@@ -319,9 +319,38 @@ def _ensure_personality_soul_column() -> None:
         conn.execute(text("ALTER TABLE personality ADD COLUMN soul TEXT"))
 
 
+def _ensure_oauth_state_columns() -> None:
+    """Startup migration: add oauth_states.user_key (and created_at)
+    if the table predates them.
+
+    Same staleness as personality.soul: ``create_all`` never adds a
+    column to an existing table, and the live database's oauth_states
+    table was created before user_key was added to the model. Without
+    this, account deletion fails on the live database (``DELETE FROM
+    oauth_states WHERE user_key = ...`` raises UndefinedColumn) and
+    the Gmail/Spotify connect flow fails on its INSERT for the same
+    reason. Inspecting first makes this a no-op once the columns
+    exist (fresh databases already have them from create_all).
+    """
+    from sqlalchemy import inspect, text
+
+    columns = {c["name"] for c in inspect(engine).get_columns("oauth_states")}
+    missing = []
+    if "user_key" not in columns:
+        missing.append("ADD COLUMN user_key VARCHAR(64)")
+    if "created_at" not in columns:
+        missing.append("ADD COLUMN created_at TIMESTAMP")
+    if not missing:
+        return
+    with engine.begin() as conn:
+        for stmt in missing:
+            conn.execute(text(f"ALTER TABLE oauth_states {stmt}"))
+
+
 def init_db() -> None:
     Base.metadata.create_all(bind=engine)
     _ensure_personality_soul_column()
+    _ensure_oauth_state_columns()
 
 
 def get_db():
