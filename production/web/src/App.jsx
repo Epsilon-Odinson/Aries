@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Veil from "./Veil.jsx";
 import Face from "./Face.jsx";
-import { api, local, isDesktop, getToken, setToken } from "./api.js";
+import { api, local, isDesktop, getToken, setToken, getEngine, setEngine, engineLabel, isNetworkError } from "./api.js";
 
 // Desktop shell only: does a message look like a PC action (open an
 // app, type, click, shutdown, screenshot, ...)? Port of the Python
@@ -364,13 +364,30 @@ export default function App() {
         // (server down, network) keeps the token and shows the error
         // screen instead, so a blip doesn't sign the user out.
         if (e.status === 401) setToken(null);
-        else setError(e.message);
+        else if (isDesktop && getEngine() === "local" && isNetworkError(e)) {
+          // The local service on this PC isn't answering — fall back
+          // to the cloud instead of stranding the user on an error
+          // screen. The note survives the reload via sessionStorage
+          // and is shown once after sign-in (see the effect below).
+          try { sessionStorage.setItem("ariesEngineNote", "The local service on this PC wasn't reachable, so Aries switched to the cloud for now. Your chats on this PC stay on this PC."); } catch { /* ignore */ }
+          setEngine("cloud");
+          window.location.reload();
+          return;
+        } else setError(e.message);
         setAuthReady(true);
       });
   }, [load]);
 
   useEffect(() => {
     if (!user) return;
+    // One-off note from an engine fallback (see the bootstrap above).
+    try {
+      const note = sessionStorage.getItem("ariesEngineNote");
+      if (note) {
+        sessionStorage.removeItem("ariesEngineNote");
+        setNotice(note);
+      }
+    } catch { /* ignore */ }
     // ElevenLabs voices: success means the server has a voice key.
     // 503 means it doesn't — talk-back stays on the device's voices.
     api.voices()
@@ -762,6 +779,9 @@ export default function App() {
         <h1>ARIES</h1>
         <p>Could not reach the Aries server: {error}</p>
         <p>Check the backend is running, then reload.</p>
+        {isDesktop && getEngine() === "local" && (
+          <button onClick={() => { setEngine("cloud"); window.location.reload(); }}>Use the cloud instead</button>
+        )}
       </div>
     );
   }
@@ -781,6 +801,9 @@ export default function App() {
         <h1>ARIES</h1>
         <p>Could not reach the Aries server: {error}</p>
         <p>Check the backend is running, then reload.</p>
+        {isDesktop && getEngine() === "local" && (
+          <button onClick={() => { setEngine("cloud"); window.location.reload(); }}>Use the cloud instead</button>
+        )}
       </div>
     );
   }
@@ -1178,6 +1201,9 @@ function ConnectionsSection() {
     <section>
       <h3>Connections</h3>
       <p className="fine">Connect an account once and the skills that need it just work. Aries keeps the sign-in on the server — your password and tokens never appear here.</p>
+      {isDesktop && getEngine() === "local" && (
+        <p className="notice">On this PC, Gmail and Spotify connect through the web app — Google and Spotify only accept the registered cloud callback, so the sign-in has to happen there. Your connection lives in your cloud account; chats and memories on this PC stay on this PC.</p>
+      )}
       {err && <p className="notice">{err}</p>}
       {!conns && !err && <p className="fine">Loading…</p>}
       {rows.map((r) => (
@@ -1196,7 +1222,7 @@ function ConnectionsSection() {
               <button disabled={busy} onClick={() => disconnect(r.key)}>Disconnect</button>
             ) : !r.note && (
               <button
-                disabled={busy || !r.configured}
+                disabled={busy || !r.configured || (isDesktop && getEngine() === "local")}
                 onClick={() => window.open(api.connectUrl(r.key), "_blank", "noopener")}
               >
                 Connect
@@ -1206,28 +1232,41 @@ function ConnectionsSection() {
         </div>
       ))}
       <button disabled={busy} onClick={load}>Check again</button>
+      {isDesktop && getEngine() === "local" && (
+        <button onClick={() => window.open("https://aries-ahvo.onrender.com", "_blank", "noopener")}>Open the web app</button>
+      )}
       <p className="fine">Setting up Gmail or Spotify needs a free developer app first. In Google Cloud Console / Spotify Developer Dashboard, create an OAuth app and add these redirect URLs — {isDesktop ? "https://aries-ahvo.onrender.com" : window.location.origin}/api/connections/google/callback and {isDesktop ? "https://aries-ahvo.onrender.com" : window.location.origin}/api/connections/spotify/callback — then add the client ID and secret in Render (Environment) as GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET and SPOTIFY_CLIENT_ID / SPOTIFY_CLIENT_SECRET.</p>
     </section>
   );
 }
 
-// Desktop shell only (hidden on the web): the local service — PC
-// control master toggle, the NVIDIA engine key (for local PC
-// actions), and the service status. The key is saved to the OS
-// credential store on this PC, never in code or in the cloud.
+// Desktop shell only (hidden on the web): the local backend —
+// engine switch (this PC / cloud), PC control master toggle, the
+// NVIDIA engine key (for chat and local PC actions) and the ElevenLabs
+// voice key (for talk-back). Keys are saved to the OS credential store
+// on this PC, never in code or in the cloud.
 function DesktopSection() {
   const [pcOn, setPcOn] = useState(false);
   const [keyState, setKeyState] = useState({ has_key: false, source: null });
-  const [svcOk, setSvcOk] = useState(null);
+  const [elevenState, setElevenState] = useState({ has_key: false, source: null });
+  const [svc, setSvc] = useState(null);
   const [key, setKey] = useState("");
+  const [elevenKey, setElevenKey] = useState("");
   const [msg, setMsg] = useState("");
+  const [engine, setEngineState] = useState(getEngine());
 
   useEffect(() => {
-    local.health().then(() => setSvcOk(true)).catch(() => setSvcOk(false));
+    local.health().then((h) => setSvc(h)).catch(() => setSvc(null));
     local.pcEnabled().then((r) => setPcOn(r.enabled)).catch(() => {});
     local.keyStatus().then(setKeyState).catch(() => {});
+    local.elevenKeyStatus().then(setElevenState).catch(() => {});
   }, []);
 
+  function switchEngine(mode) {
+    setEngine(mode);
+    setEngineState(mode);
+    window.location.reload();
+  }
   async function togglePc() {
     const next = !pcOn;
     try {
@@ -1245,21 +1284,48 @@ function DesktopSection() {
       setMsg("Engine key saved on this PC.");
     } catch (e) { setMsg(e.message); }
   }
+  async function saveElevenKey() {
+    if (!elevenKey.trim()) { setMsg("Paste a key first."); return; }
+    try {
+      await local.saveElevenKey(elevenKey.trim());
+      setElevenKey("");
+      setElevenState(await local.elevenKeyStatus());
+      setMsg("Voice key saved on this PC.");
+    } catch (e) { setMsg(e.message); }
+  }
   return (
     <section>
       <h3>Desktop</h3>
-      <p className="fine">Local service: {svcOk === null ? "checking…" : svcOk ? "running" : "not running — PC control, mic and wake phrase need it. Restart the app."}</p>
+      <p className="fine">Engine: {engine === "local"
+        ? "on this PC — chats, memories and tasks live on this PC."
+        : "cloud (aries-ahvo.onrender.com) — chats, memories and tasks live in your cloud account."}</p>
+      <div className="toggle-row">
+        <button className="pill" type="button" aria-pressed={engine === "local"} disabled={!svc} onClick={() => switchEngine("local")}>
+          This PC
+        </button>
+        <button className="pill" type="button" aria-pressed={engine === "cloud"} onClick={() => switchEngine("cloud")}>
+          Cloud
+        </button>
+      </div>
+      <p className="fine">Local service: {svc
+        ? `running — backend on this PC, data at ${svc.db_path || "~/.aries/aries.db"}`
+        : "not running — PC control, mic and wake phrase need it. Restart the app."}</p>
       <div className="toggle-row">
         <button className="pill" type="button" aria-pressed={pcOn} onClick={togglePc}>
           PC control {pcOn ? "(on)" : "(off)"}
         </button>
       </div>
       <p className="fine">PC control is off by default. When on, Aries asks before acting on your PC — and asks a second time before anything destructive (shutdown, restart, delete).</p>
-      <label>Engine key (NVIDIA, for PC actions)
+      <label>Engine key (NVIDIA, for chat and PC actions)
         <input type="password" value={key} onChange={(e) => setKey(e.target.value)} placeholder="nvapi-…" />
       </label>
       <p className="fine">Status: {keyState.has_key ? `saved (${keyState.source})` : "no key on this PC yet"}. The key is saved to the Windows Credential Manager, never in code.</p>
       <button onClick={saveKey}>Save engine key</button>
+      <label>Voice key (ElevenLabs, for talk-back)
+        <input type="password" value={elevenKey} onChange={(e) => setElevenKey(e.target.value)} placeholder="sk-…" />
+      </label>
+      <p className="fine">Status: {elevenState.has_key ? `saved (${elevenState.source})` : "no voice key on this PC yet — talk-back uses the device's built-in voices"}. The key is saved to the Windows Credential Manager, never in code.</p>
+      <button onClick={saveElevenKey}>Save voice key</button>
       {msg && <p className="notice">{msg}</p>}
     </section>
   );
@@ -1296,6 +1362,7 @@ function AuthScreen({ onAuthed }) {
       <Face state="idle" label="Aries" />
       <h1>ARIES</h1>
       <p className="auth-sub">Sign in to your own Aries. Your chats, memories and tasks are yours alone.</p>
+      <p className="fine">Signing in {engineLabel()} — {getEngine() === "local" ? "your chats, memories and tasks live on this PC." : "your chats, memories and tasks live in your cloud account."}</p>
       <form onSubmit={submit}>
         <input
           value={username}
@@ -1717,16 +1784,18 @@ function MoreSheet({ data, user, onLogout, tab, setTab, onClose, useSearch, setU
 
         <section>
           <h3>Desktop app &amp; installer</h3>
-          <p>The desktop app (0.7.0) is the same React app as this website,
+          <p>The desktop app is the same React app as this website,
             bundled locally into a real installed PC program — never the
             live site in a window. It fills the full screen when activated,
             is freely resizable, and tapping the bot drops it into mini mode
-            floating bottom-right, just above the taskbar. A local service
-            on your PC handles PC control, the microphone and the wake
-            phrase; chat, search, memory and voice still come from the
-            server.</p>
-          <p><strong>Engine key:</strong> server-side only. The installer never contains
-            an API key — users sign in to the SaaS backend instead. Aries is private
+            floating bottom-right, just above the taskbar. A local backend
+            on your PC handles chat, search, memory, voice, PC control,
+            the microphone and the wake phrase — the cloud is only a
+            fallback when the local service is down. Your chats and
+            memories on this PC live on this PC.</p>
+          <p><strong>Engine key:</strong> on this PC it lives in the Windows Credential
+            Manager; in the cloud it stays server-side. The installer never
+            contains an API key. Aries is private
             to Epsilon and Kelfy until it goes commercial.</p>
           <p><strong>Roadmap:</strong> web search ✓ · voice ✓ · tasks ✓ · installer ✓ ·
             face login ✓ · screenshot ✓ · PC control ✓ (in the desktop app).</p>
@@ -1762,8 +1831,8 @@ function SetupWizard({ onDone, onSkip }) {
       <div className="wizard-card">
         <h2>Welcome to Aries</h2>
         <p className="fine">Step {step + 1} of {steps.length}: {steps[step]}</p>
-        <p className="fine">One thing setup never asks for: an API key. The engine key stays
-          server-side only, never in the app and never on your device.</p>
+        <p className="fine">One thing setup never asks for: an API key. The engine key is never
+          in the app itself — {isDesktop ? "on this PC it lives in the Windows Credential Manager." : "on the web it stays server-side only, never on your device."}</p>
         {step === 1 && (
           <label>What should Aries call you?
             <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Your name" />

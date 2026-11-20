@@ -30,9 +30,25 @@ class AriesLLMError(RuntimeError):
     """A clear, user-facing error from the LLM call."""
 
 
+def _is_local() -> bool:
+    """True when this backend is the PC sidecar, not the cloud.
+
+    The sidecar sets ARIES_LOCAL_BACKEND=1 in prepare_environment().
+    The key-missing error then points at the PC's Settings instead of
+    the Render dashboard, so the stored reply is right on both
+    surfaces (and in chat history).
+    """
+    return bool(os.getenv("ARIES_LOCAL_BACKEND"))
+
+
 def _api_key() -> str:
     key = os.getenv("NVIDIA_API_KEY", "").strip()
     if not key:
+        if _is_local():
+            raise AriesLLMError(
+                "No engine key on this PC yet — add it in Settings → "
+                "More → Desktop, or switch the engine to Cloud there."
+            )
         raise AriesLLMError(
             "NVIDIA_API_KEY is not set on the server. "
             "Set it in the Render dashboard (Environment), never in code."
@@ -79,6 +95,12 @@ def chat(
         raise AriesLLMError(f"Network error talking to the NVIDIA API: {exc}") from exc
 
     if response.status_code == 401:
+        if _is_local():
+            raise AriesLLMError(
+                "NVIDIA rejected the engine key on this PC (401). "
+                "The key may be wrong, expired, or revoked — "
+                "replace it in Settings → More → Desktop (Engine key)."
+            )
         raise AriesLLMError(
             "NVIDIA rejected the server API key (401). "
             "The key may be wrong, expired, or revoked — "

@@ -3,12 +3,57 @@
 // In dev, VITE_API_URL can point at http://localhost:8000.
 // In the desktop shell (Electron) the page is a LOCAL file, so there
 // is no relative /api — window.ariesDesktop (set by the shell's
-// preload) gives the cloud API address, and the local Python service
-// address for PC-only features.
+// preload) gives the local Python service address and the cloud API
+// address, and the app picks an engine:
+//
+// - "local" (desktop only, default when the local service is up):
+//   the full backend runs on this PC — chat, memory, tasks, voice,
+//   face login, everything — against a local database in ~/.aries.
+//   The local service IS the backend; the cloud is not involved.
+// - "cloud": the Render backend (aries-ahvo.onrender.com), the same
+//   one the website uses. The fallback when the local service is
+//   down, and the only engine on the web.
+//
+// The engine is stored per device in localStorage ("ariesEngine").
+// Each engine has its own session token ("ariesToken" for the cloud,
+// "ariesTokenLocal" for this PC) — the local and cloud accounts are
+// separate accounts, so one token can never be sent to the other.
 const DESK =
   (typeof window !== "undefined" && window.ariesDesktop) || null;
 export const isDesktop = !!DESK;
-const BASE = DESK ? DESK.cloudApi : import.meta.env.VITE_API_URL || "";
+const CLOUD_BASE = DESK ? DESK.cloudApi : import.meta.env.VITE_API_URL || "";
+const ENGINE_KEY = "ariesEngine";
+
+export function getEngine() {
+  if (!DESK) return "cloud";
+  try {
+    const e = window.localStorage.getItem(ENGINE_KEY);
+    if (e === "cloud" || e === "local") return e;
+  } catch { /* ignore */ }
+  return DESK.localApi ? "local" : "cloud";
+}
+export function setEngine(mode) {
+  try {
+    window.localStorage.setItem(ENGINE_KEY, mode === "cloud" ? "cloud" : "local");
+  } catch { /* ignore */ }
+}
+// Short label for the UI: where this session's data lives.
+export function engineLabel() {
+  return getEngine() === "local" ? "on this PC" : "in the cloud";
+}
+function apiBase() {
+  if (!DESK) return CLOUD_BASE;
+  if (getEngine() === "local" && DESK.localApi) return DESK.localApi;
+  return DESK.cloudApi;
+}
+export function getApiBase() {
+  return apiBase();
+}
+// A fetch that failed before any HTTP status came back (service down,
+// no network) — as opposed to a 401/403/503 from a live server.
+export function isNetworkError(err) {
+  return !!err && typeof err.status === "undefined";
+}
 
 // Accounts: the session token lives in localStorage and rides on
 // every API call as Authorization: Bearer. The server rejects any
@@ -17,13 +62,16 @@ const BASE = DESK ? DESK.cloudApi : import.meta.env.VITE_API_URL || "";
 // are hers. OAuth connect opens a new tab, which cannot send a
 // header, so the token travels as ?token= on that one same-origin
 // URL only — it is never forwarded to Google or Spotify.
+function tokenKey() {
+  return getEngine() === "local" && DESK ? "ariesTokenLocal" : "ariesToken";
+}
 export function getToken() {
-  try { return window.localStorage.getItem("ariesToken") || null; } catch { return null; }
+  try { return window.localStorage.getItem(tokenKey()) || null; } catch { return null; }
 }
 export function setToken(token) {
   try {
-    if (token) window.localStorage.setItem("ariesToken", token);
-    else window.localStorage.removeItem("ariesToken");
+    if (token) window.localStorage.setItem(tokenKey(), token);
+    else window.localStorage.removeItem(tokenKey());
   } catch { /* ignore */ }
 }
 function authHeaders() {
@@ -32,7 +80,7 @@ function authHeaders() {
 }
 
 async function call(path, opts = {}) {
-  const res = await fetch(`${BASE}${path}`, {
+  const res = await fetch(`${apiBase()}${path}`, {
     headers: { "Content-Type": "application/json", ...authHeaders(), ...(opts.headers || {}) },
     ...opts,
   });
@@ -120,6 +168,14 @@ export const local = {
       method: "POST",
       body: JSON.stringify({ key }),
     }),
+  // ElevenLabs voice key for talk-back on this PC (optional — without
+  // it talk-back uses the device's built-in voices).
+  elevenKeyStatus: () => localCall("/local/elevenlabs/key/status"),
+  saveElevenKey: (key) =>
+    localCall("/local/elevenlabs/key", {
+      method: "POST",
+      body: JSON.stringify({ key }),
+    }),
 };
 
 export const api = {
@@ -142,7 +198,7 @@ export const api = {
   // Talk-back audio as an MP3 blob. Throws on 503 (not configured) or
   // any ElevenLabs error — the caller falls back to browser voices.
   tts: async (text, voiceId) => {
-    const res = await fetch(`${BASE}/api/tts`, {
+    const res = await fetch(`${apiBase()}/api/tts`, {
       method: "POST",
       headers: { "Content-Type": "application/json", ...authHeaders() },
       body: JSON.stringify({ text, voice_id: voiceId || undefined }),
@@ -188,12 +244,12 @@ export const api = {
   // possible), so the session token rides as ?token= on this
   // same-origin URL. The provider never sees it.
   connectUrl: (service) =>
-    `${BASE}/api/connections/${service}/connect?token=${encodeURIComponent(getToken() || "")}`,
+    `${apiBase()}/api/connections/${service}/connect?token=${encodeURIComponent(getToken() || "")}`,
   disconnectConnection: (service) =>
     call(`/api/connections/${service}/disconnect`, { method: "POST" }),
   // Multipart endpoints use fetch directly (no JSON content-type).
   upload: async (path, form) => {
-    const res = await fetch(`${BASE}${path}`, { method: "POST", headers: { ...authHeaders() }, body: form });
+    const res = await fetch(`${apiBase()}${path}`, { method: "POST", headers: { ...authHeaders() }, body: form });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
       const err = new Error(data.detail || `Upload failed (${res.status})`);

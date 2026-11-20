@@ -119,6 +119,10 @@ def get_connect_user(
 
 @app.get("/api/health")
 def health():
+    # DATABASE_URL is set for Postgres (Render) AND for a local SQLite
+    # file (the desktop app sets it to ~/.aries/aries.db), so the
+    # scheme — not just "is it set" — decides the label.
+    _db_url = os.getenv("DATABASE_URL", "")
     return {
         "ok": True,
         "service": "aries",
@@ -126,7 +130,7 @@ def health():
         "key_configured": bool(os.getenv("NVIDIA_API_KEY")),
         "vision_configured": bool(os.getenv("VISION_MODEL")),
         "elevenlabs_configured": voice_mod.configured(),
-        "db": "postgres" if os.getenv("DATABASE_URL") else "sqlite",
+        "db": "postgres" if _db_url.startswith(("postgres://", "postgresql://")) else "sqlite",
     }
 
 

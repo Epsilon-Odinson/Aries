@@ -41,6 +41,39 @@ def _api_key() -> str:
     return os.getenv("ELEVENLABS_API_KEY", "").strip()
 
 
+def _is_local() -> bool:
+    """True when this backend is the PC sidecar, not the cloud.
+
+    The sidecar sets ARIES_LOCAL_BACKEND=1; key errors then point at
+    the PC's Settings instead of the Render dashboard.
+    """
+    return bool(os.getenv("ARIES_LOCAL_BACKEND"))
+
+
+def _not_configured_msg() -> str:
+    if _is_local():
+        return (
+            "No ElevenLabs voice key on this PC yet — add it in "
+            "Settings → More → Desktop (Voice key)."
+        )
+    return (
+        "ELEVENLABS_API_KEY is not set on the server. "
+        "Add it in the Render dashboard (Environment), never in code."
+    )
+
+
+def _rejected_msg() -> str:
+    if _is_local():
+        return (
+            "ElevenLabs rejected the voice key on this PC (401). "
+            "Check it in Settings → More → Desktop (Voice key)."
+        )
+    return (
+        "ElevenLabs rejected the server voice key (401). "
+        "Check ELEVENLABS_API_KEY in the Render dashboard."
+    )
+
+
 def configured() -> bool:
     return bool(_api_key())
 
@@ -49,10 +82,7 @@ def list_voices() -> list[dict]:
     """Voices on the ElevenLabs account, trimmed to what the UI needs."""
     key = _api_key()
     if not key:
-        raise VoiceNotConfigured(
-            "ELEVENLABS_API_KEY is not set on the server. "
-            "Add it in the Render dashboard (Environment), never in code."
-        )
+        raise VoiceNotConfigured(_not_configured_msg())
     try:
         resp = requests.get(
             f"{API_BASE}/voices",
@@ -62,10 +92,7 @@ def list_voices() -> list[dict]:
     except requests.RequestException as exc:
         raise VoiceError(f"Could not reach ElevenLabs: {exc}") from exc
     if resp.status_code == 401:
-        raise VoiceError(
-            "ElevenLabs rejected the server voice key (401). "
-            "Check ELEVENLABS_API_KEY in the Render dashboard."
-        )
+        raise VoiceError(_rejected_msg())
     if not resp.ok:
         raise VoiceError(
             f"ElevenLabs voices error {resp.status_code}: {resp.text[:200]}"
@@ -87,10 +114,7 @@ def synthesize(text: str, voice_id: str | None = None) -> bytes:
     """Turn text into MP3 audio bytes with the chosen ElevenLabs voice."""
     key = _api_key()
     if not key:
-        raise VoiceNotConfigured(
-            "ELEVENLABS_API_KEY is not set on the server. "
-            "Add it in the Render dashboard (Environment), never in code."
-        )
+        raise VoiceNotConfigured(_not_configured_msg())
     vid = (voice_id or "").strip() or DEFAULT_VOICE_ID
     text = (text or "").strip()
     if not text:
@@ -121,10 +145,7 @@ def synthesize(text: str, voice_id: str | None = None) -> bytes:
     except requests.RequestException as exc:
         raise VoiceError(f"Could not reach ElevenLabs: {exc}") from exc
     if resp.status_code == 401:
-        raise VoiceError(
-            "ElevenLabs rejected the server voice key (401). "
-            "Check ELEVENLABS_API_KEY in the Render dashboard."
-        )
+        raise VoiceError(_rejected_msg())
     if resp.status_code == 402:
         raise VoiceError(
             "ElevenLabs voice quota is used up (402). "
