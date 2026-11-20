@@ -32,6 +32,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -402,6 +403,97 @@ def validate_steps(steps: list[dict]) -> None:
 # --- running one step ----------------------------------------------------------
 
 
+# Friendly names people actually say, mapped to the real executable.
+# "Windows Explorer" is explorer.exe, "VLC" is vlc.exe — the name
+# you see in the Start menu is often not the .exe name, and `start`
+# cannot find an app by its display name alone.
+_APP_ALIASES = {
+    "windows explorer": "explorer.exe",
+    "file explorer": "explorer.exe",
+    "explorer": "explorer.exe",
+    "my computer": "explorer.exe",
+    "this pc": "explorer.exe",
+    "vlc": "vlc.exe",
+    "vlc media player": "vlc.exe",
+    "notepad": "notepad.exe",
+    "calculator": "calc.exe",
+    "calc": "calc.exe",
+    "chrome": "chrome.exe",
+    "google chrome": "chrome.exe",
+    "edge": "msedge.exe",
+    "microsoft edge": "msedge.exe",
+    "firefox": "firefox.exe",
+    "word": "winword.exe",
+    "microsoft word": "winword.exe",
+    "excel": "excel.exe",
+    "microsoft excel": "excel.exe",
+    "powerpoint": "powerpnt.exe",
+    "microsoft powerpoint": "powerpnt.exe",
+    "paint": "mspaint.exe",
+    "task manager": "taskmgr.exe",
+    "control panel": "control.exe",
+    "command prompt": "cmd.exe",
+    "cmd": "cmd.exe",
+    "powershell": "powershell.exe",
+    "terminal": "wt.exe",
+    "windows terminal": "wt.exe",
+    "spotify": "spotify.exe",
+    "whatsapp": "WhatsApp.exe",
+    "telegram": "Telegram.exe",
+    "discord": "Discord.exe",
+    "steam": "steam.exe",
+    "vs code": "Code.exe",
+    "visual studio code": "Code.exe",
+    "settings": "ms-settings:",
+}
+
+# URI schemes (Settings pages and the like) are opened with the
+# shell, not as an .exe.
+_URI_SCHEMES = ("ms-settings:",)
+
+
+def _resolve_app_exe(name: str) -> str | None:
+    """Resolve a friendly app name to a real executable path or URI.
+
+    Returns the .exe path (or a URI like "ms-settings:") when the app
+    is actually on this PC, else None. Looks in the alias map, then
+    PATH, then the Windows App Paths registry (where installers
+    register their .exe), then as a literal file path.
+    """
+    key = name.strip().lower()
+    if not key:
+        return None
+    exe = _APP_ALIASES.get(key)
+    if exe is None:
+        exe = key if key.endswith(".exe") else key + ".exe"
+    if any(exe.startswith(s) for s in _URI_SCHEMES):
+        return exe
+    # A literal path to an .exe the user gave.
+    if os.path.isfile(exe) or os.path.isfile(os.path.expanduser(exe)):
+        return exe
+    found = shutil.which(exe)
+    if found:
+        return found
+    if os.name == "nt":
+        try:
+            import winreg
+
+            for root in (winreg.HKEY_CURRENT_USER, winreg.HKEY_LOCAL_MACHINE):
+                try:
+                    with winreg.OpenKey(
+                        root,
+                        r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\\" + exe,
+                    ) as k:
+                        path, _ = winreg.QueryValueEx(k, "")
+                        if path and os.path.exists(path):
+                            return path
+                except OSError:
+                    continue
+        except Exception:
+            pass
+    return None
+
+
 def _run_open_app(step: dict) -> str:
     name = str(step["name"]).strip()
     if not name:
@@ -411,17 +503,38 @@ def _run_open_app(step: dict) -> str:
             "Opening apps by name works on Windows only — "
             "this PC control build targets the Windows .exe."
         )
-    # `start` resolves registered app names (notepad, calc, chrome…)
-    # and .exe paths. An empty title argument keeps `start` from
-    # treating a quoted name as the window title.
-    try:
-        subprocess.Popen(
-            ["cmd", "/c", "start", "", name],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+    target = _resolve_app_exe(name)
+    if target is None:
+        raise PcControlError(
+            f"There's no app called “{name}” on this PC. "
+            "Check the name and try again — for example, the file "
+            "manager is “Windows Explorer” and the media player is “VLC”."
         )
-    except OSError as exc:
+    # URI schemes (Settings pages) go through the shell.
+    if any(target.startswith(s) for s in _URI_SCHEMES):
+        try:
+            os.startfile(target)  # noqa: S606 - user-confirmed target
+        except OSError as exc:
+            raise PcControlError(f"Could not open “{name}”: {exc}") from exc
+        return f"Opened “{name}”."
+    # Launch with `start` and CHECK the result. The old code used
+    # fire-and-forget Popen with stderr swallowed, so a name `start`
+    # could not find still reported "Opened" — a false success.
+    # `start` exits non-zero and prints the error when it cannot find
+    # the program, so a real failure is now reported, not hidden.
+    try:
+        proc = subprocess.run(
+            ["cmd", "/c", "start", "", target],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
         raise PcControlError(f"Could not open “{name}”: {exc}") from exc
+    if proc.returncode != 0:
+        err = (proc.stderr or "").strip()
+        detail = err.splitlines()[-1] if err else f"exit code {proc.returncode}"
+        raise PcControlError(f"Could not open “{name}”: {detail}")
     return f"Opened “{name}”."
 
 
