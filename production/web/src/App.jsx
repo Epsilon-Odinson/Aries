@@ -2248,8 +2248,8 @@ function MoreSheet({ data, user, onLogout, tab, setTab, onClose, useSearch, setU
           <p><strong>Engine key:</strong> on this PC it's saved securely on your
             PC; in the cloud you never have to think about it. Aries is private
             to Epsilon and Kelfy until it goes commercial.</p>
-          <a className="download-btn" href="https://github.com/Epsilon-Odinson/Aries/releases/download/v0.8.0-desktop/Aries-Setup.exe">Download for Windows (Installer)</a>
-          <p style={{ marginTop: "8px" }}>The installer sets up Aries, offers a desktop shortcut and a taskbar pin. Prefer the portable single file instead? Get <a href="https://github.com/Epsilon-Odinson/Aries/releases/download/v0.8.0-desktop/Aries.exe">Aries.exe</a>.</p>
+          <a className="download-btn" href="https://github.com/Epsilon-Odinson/Aries/releases/download/v0.9.0-desktop/Aries-Setup.exe">Download for Windows (Installer)</a>
+          <p style={{ marginTop: "8px" }}>The installer sets up Aries, offers a desktop shortcut and a taskbar pin. Prefer the portable single file instead? Get <a href="https://github.com/Epsilon-Odinson/Aries/releases/download/v0.9.0-desktop/Aries.exe">Aries.exe</a>.</p>
         </section>
 
         {isDesktop && <DesktopSection />}
