@@ -1799,8 +1799,8 @@ function MoreSheet({ data, user, onLogout, tab, setTab, onClose, useSearch, setU
             to Epsilon and Kelfy until it goes commercial.</p>
           <p><strong>Roadmap:</strong> web search ✓ · voice ✓ · tasks ✓ · installer ✓ ·
             face login ✓ · screenshot ✓ · PC control ✓ (in the desktop app).</p>
-          <a className="download-btn" href="https://github.com/Epsilon-Odinson/Aries/releases/download/v0.7.0-desktop/Aries-Setup.exe">Download for Windows (Installer)</a>
-          <p style={{ marginTop: "8px" }}>The installer sets up Aries, offers a desktop shortcut and a taskbar pin. Prefer the portable single file instead? Get <a href="https://github.com/Epsilon-Odinson/Aries/releases/download/v0.7.0-desktop/Aries.exe">Aries.exe</a> from the same release.</p>
+          <a className="download-btn" href="https://github.com/Epsilon-Odinson/Aries/releases/download/v0.8.0-desktop/Aries-Setup.exe">Download for Windows (Installer)</a>
+          <p style={{ marginTop: "8px" }}>The installer sets up Aries, offers a desktop shortcut and a taskbar pin. Prefer the portable single file instead? Get <a href="https://github.com/Epsilon-Odinson/Aries/releases/download/v0.8.0-desktop/Aries.exe">Aries.exe</a> from the same release.</p>
         </section>
 
         {isDesktop && <DesktopSection />}
