@@ -699,6 +699,38 @@ body.desktop-mini .face-btn { cursor: pointer; -webkit-app-region: no-drag; }
   letter-spacing: 0.08em;
 }
 .auth-screen .auth-sub { color: var(--cream-dim); margin: 0 0 0.5rem; max-width: 340px; }
+.auth-title { display: flex; align-items: center; gap: 0.6rem; }
+.info-btn {
+  width: 1.9rem;
+  height: 1.9rem;
+  border-radius: 50%;
+  border: 1px solid var(--purple-soft);
+  background: transparent;
+  color: var(--cream);
+  font-size: 1rem;
+  font-weight: 700;
+  font-style: italic;
+  font-family: var(--serif);
+  cursor: pointer;
+  flex: none;
+  line-height: 1;
+  padding: 0;
+}
+.info-btn[aria-expanded="true"] { background: var(--purple); border-color: var(--purple); color: #fff; }
+/* In-flow panel: it pushes the form down instead of covering it, so on
+   short windows the form stays reachable via the screen's own scroll. */
+.auth-info {
+  width: min(340px, 90vw);
+  text-align: left;
+  border: 1px solid rgba(183, 139, 255, 0.3);
+  border-radius: 12px;
+  background: rgba(19, 3, 30, 0.85);
+  padding: 0.9rem 1rem;
+  color: var(--cream);
+  font-size: 0.95rem;
+  line-height: 1.5;
+}
+.auth-info p { margin: 0 0 0.6rem; }
 .auth-screen form {
   display: flex;
   flex-direction: column;

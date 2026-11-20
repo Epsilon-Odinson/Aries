@@ -192,6 +192,16 @@ export const api = {
   adminUsers: () => call("/api/admin/users"),
   adminDeleteUser: (username) =>
     call(`/api/admin/users/${encodeURIComponent(username)}`, { method: "DELETE" }),
+  // Issue reports (Settings → More). Anyone signed in can file one
+  // and see their own; only the admin sees everyone's.
+  submitReport: (title, body, context) =>
+    call("/api/reports", { method: "POST", body: JSON.stringify({ title, body, context }) }),
+  myReports: () => call("/api/reports/mine"),
+  adminReports: () => call("/api/admin/reports"),
+  adminResolveReport: (id, status) =>
+    call(`/api/admin/reports/${id}/resolve${status ? `?status=${status}` : ""}`, { method: "POST" }),
+  adminDeleteReport: (id) =>
+    call(`/api/admin/reports/${id}`, { method: "DELETE" }),
   state: () => call("/api/state"),
   // ElevenLabs voices on the server. 503 when the voice key is not set.
   voices: () => call("/api/voices"),
@@ -232,6 +242,25 @@ export const api = {
     form.append("file", file);
     form.append("consent", "true");
     return api.upload("/api/memories/import", form);
+  },
+  // The signed-in user's own memory file, as a download.
+  downloadMemoryFile: async () => {
+    const res = await fetch(`${apiBase()}/api/memories/file`, {
+      headers: { ...authHeaders() },
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.detail || `Download failed (${res.status})`);
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "aries-memory.md";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
   },
   addTask: (task) => call("/api/tasks", { method: "POST", body: JSON.stringify(task) }),
   toggleTask: (id) => call(`/api/tasks/${id}/done`, { method: "POST" }),

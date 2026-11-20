@@ -281,7 +281,7 @@ export default function App() {
   const [input, setInput] = useState("");
   const [faceState, setFaceState] = useState("idle");
   const [status, setStatus] = useState("READY");
-  const [useSearch, setUseSearch] = useState(false);
+  const [useSearch, setUseSearch] = useState(true);
   const [showMore, setShowMore] = useState(false);
   const [moreTab, setMoreTab] = useState("aries");
   const [mini, setMini] = useState(false);
@@ -503,14 +503,14 @@ export default function App() {
           res.needs_permission,
           `Aries wants to use ${PERM_LABELS[res.needs_permission] || res.needs_permission} to answer this.`
         );
-        if (!ok) {
-          setFaceState("idle");
-          setStatus("READY");
-          return;
+        if (ok) {
+          res = await api.chat(msg, opts.useSearch ?? useSearch, {
+            [res.needs_permission]: true,
+          });
+        } else {
+          // Declined: still answer the question, just without live info.
+          res = await api.chat(msg, false, {});
         }
-        res = await api.chat(msg, opts.useSearch ?? useSearch, {
-          [res.needs_permission]: true,
-        });
       }
       setFaceState(res.searched ? "idle" : "speaking");
       setStatus(res.searched ? "READY" : "SPEAKING");
@@ -1341,6 +1341,7 @@ function AuthScreen({ onAuthed }) {
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
+  const [showInfo, setShowInfo] = useState(false);
   async function submit(e) {
     e.preventDefault();
     if (!username.trim() || !password) { setErr("Enter a username and a password."); return; }
@@ -1360,7 +1361,24 @@ function AuthScreen({ onAuthed }) {
   return (
     <div className="auth-screen">
       <Face state="idle" label="Aries" />
-      <h1>ARIES</h1>
+      <div className="auth-title">
+        <h1>ARIES</h1>
+        <button
+          type="button"
+          className="info-btn"
+          aria-expanded={showInfo}
+          aria-label="What can Aries do?"
+          onClick={() => setShowInfo((v) => !v)}
+        >
+          i
+        </button>
+      </div>
+      {showInfo && (
+        <div className="auth-info" role="region" aria-label="What Aries can do">
+          <p>Aries is your personal AI pal. It chats with you, remembers what matters to you, searches the live web for current answers, keeps your tasks and reminders, talks back out loud, and runs on your PC too. Your chats, memories and tasks are yours alone — nobody else sees them.</p>
+          <button type="button" className="link-btn" onClick={() => setShowInfo(false)}>Close</button>
+        </div>
+      )}
       <p className="auth-sub">Sign in to your own Aries. Your chats, memories and tasks are yours alone.</p>
       <p className="fine">Signing in {engineLabel()} — {getEngine() === "local" ? "your chats, memories and tasks live on this PC." : "your chats, memories and tasks live in your cloud account."}</p>
       <form onSubmit={submit}>
@@ -1438,6 +1456,135 @@ function AdminPanel() {
         ))}
       </ul>
       <button disabled={busy} onClick={loadUsers}>Refresh</button>
+    </section>
+  );
+}
+
+// Report an issue (Settings → More): anyone can tell the admin
+// something is wrong, in plain words. The engine, app version and
+// screen are attached automatically — nobody has to type them.
+// The user also sees their own past reports and whether each one
+// is fixed yet.
+function ReportIssue() {
+  const [title, setTitle] = useState("");
+  const [body, setBody] = useState("");
+  const [mine, setMine] = useState(null);
+  const [sent, setSent] = useState("");
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [version, setVersion] = useState("");
+  const loadMine = useCallback(async () => {
+    try { setMine((await api.myReports()).reports || []); } catch { setMine([]); }
+  }, []);
+  useEffect(() => { loadMine(); }, [loadMine]);
+  useEffect(() => {
+    api.health().then((h) => setVersion(h.version || "")).catch(() => {});
+  }, []);
+  async function send() {
+    if (!title.trim() || !body.trim()) {
+      setErr("Give it a short title and say what happened.");
+      return;
+    }
+    setBusy(true);
+    setErr("");
+    try {
+      await api.submitReport(title.trim(), body.trim(), {
+        engine: getEngine(),
+        screen: "Settings → More",
+        app_version: version || undefined,
+      });
+      setTitle("");
+      setBody("");
+      setSent("Thanks — Epsilon will see this.");
+      await loadMine();
+    } catch (e) {
+      setErr(e.message || "Could not send the report.");
+    }
+    setBusy(false);
+  }
+  return (
+    <section>
+      <h3>Report an issue</h3>
+      <p className="fine">Something wrong? Tell Epsilon — what happened, and what you were doing when it happened.</p>
+      <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Short title — e.g. Mini mode won't open" />
+      <textarea value={body} onChange={(e) => setBody(e.target.value)} placeholder="What happened? What were you doing?" rows={3} />
+      <button disabled={busy} onClick={send}>Send report</button>
+      {sent && <p className="notice">{sent}</p>}
+      {err && <p className="notice">{err}</p>}
+      {(mine || []).length > 0 && (
+        <>
+          <h3>Your reports</h3>
+          <ul className="report-list">
+            {mine.map((r) => (
+              <li key={r.id}>
+                <span><strong>{r.title}</strong>{r.created_at ? ` · ${new Date(r.created_at).toLocaleDateString()}` : ""}</span>
+                <span>{r.status === "resolved" ? "Fixed" : "Open"}</span>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+    </section>
+  );
+}
+
+// Reports inbox (Settings → More, admin only): every issue anyone
+// reported, newest first, with who sent it and when. Resolve marks
+// it fixed — the reporter sees "Fixed" on their side. Delete
+// removes it for good.
+function ReportsInbox() {
+  const [reports, setReports] = useState(null);
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(false);
+  const loadReports = useCallback(async () => {
+    try {
+      setErr("");
+      setReports((await api.adminReports()).reports || []);
+    } catch (e) {
+      setErr(e.message || "Could not load reports.");
+    }
+  }, []);
+  useEffect(() => { loadReports(); }, [loadReports]);
+  const openCount = (reports || []).filter((r) => r.status === "open").length;
+  async function resolve(id, status) {
+    setBusy(true);
+    try { await api.adminResolveReport(id, status); await loadReports(); }
+    catch (e) { setErr(e.message); }
+    setBusy(false);
+  }
+  async function remove(id) {
+    if (!confirm("Delete this report? It goes away for good.")) return;
+    setBusy(true);
+    try { await api.adminDeleteReport(id); await loadReports(); }
+    catch (e) { setErr(e.message); }
+    setBusy(false);
+  }
+  return (
+    <section>
+      <h3>Reports</h3>
+      <p className="fine">{reports === null ? "Loading…" : `${openCount} open · ${reports.length} total`}</p>
+      {err && <p className="notice">{err}</p>}
+      <ul className="report-list">
+        {(reports || []).map((r) => (
+          <li key={r.id}>
+            <span>
+              <strong>{r.reporter}</strong>
+              {r.created_at ? ` · ${new Date(r.created_at).toLocaleString()}` : ""}
+              {r.context?.engine ? ` · ${r.context.engine === "local" ? "on this PC" : "in the cloud"}` : ""}
+              <br />
+              <strong>{r.title}</strong> — {r.body}
+            </span>
+            <span>
+              {r.status === "open"
+                ? <button disabled={busy} onClick={() => resolve(r.id, "resolved")}>Resolve</button>
+                : <button disabled={busy} onClick={() => resolve(r.id, "open")}>Reopen</button>}
+              <button disabled={busy} onClick={() => remove(r.id)}>Delete</button>
+            </span>
+          </li>
+        ))}
+      </ul>
+      {(reports || []).length === 0 && reports !== null && <p className="fine">No reports yet.</p>}
+      <button disabled={busy} onClick={loadReports}>Refresh</button>
     </section>
   );
 }
@@ -1662,7 +1809,7 @@ function MoreSheet({ data, user, onLogout, tab, setTab, onClose, useSearch, setU
               Search the web
             </button>
           </div>
-          <p className="fine">Talk back reads Aries' replies aloud. Wake phrase listens for “Hey Aries”. Search the web grounds the next answer in live results.</p>
+          <p className="fine">Talk back reads Aries' replies aloud. Wake phrase listens for “Hey Aries”. Web search is on — Aries checks live info for each answer. Turn it off to answer from what it already knows.</p>
           <VoiceSelfTest elevenConfigured={elevenConfigured} elevenDefaultName={elevenDefaultName} />
         </section>
       )}
@@ -1703,13 +1850,24 @@ function MoreSheet({ data, user, onLogout, tab, setTab, onClose, useSearch, setU
               </li>
             ))}
           </ul>
-          {memories.length === 0 && <p>No memories yet. Teach Aries something above, or say “remember …” in chat.</p>}
+          {memories.length === 0 && <p>No memories yet. Aries learns from your chats on its own — or teach it something above.</p>}
           <h3>About you — from Aries' memory file</h3>
-          <p className="fine">Facts Aries always knows about you. This is read-only — day-to-day things Aries learns live in the vault above.</p>
+          <p className="fine">Your own file, kept by Aries from what it learns about you in chat. Only you can see it.</p>
           {data.memory_file ? (
             <div className="memory-file">{data.memory_file}</div>
           ) : (
             <p className="fine">Nothing here yet.</p>
+          )}
+          {data.memory_file && (
+            <button onClick={async () => {
+              try {
+                await api.downloadMemoryFile();
+              } catch (err) {
+                setMsg(`Download failed: ${err.message}`);
+              }
+            }}>
+              Download my memory file
+            </button>
           )}
           <h3>Full history</h3>
           <button onClick={async () => { if (confirm("Clear all chat history?")) { await api.clearChat(true); onClose(); } }}>
@@ -1733,6 +1891,8 @@ function MoreSheet({ data, user, onLogout, tab, setTab, onClose, useSearch, setU
           <p>Signed in as <strong>{user?.username}</strong>. Your chats, memories and tasks are yours alone.</p>
           <button onClick={onLogout}>Log out</button>
         </section>
+        <ReportIssue />
+        {user?.role === "admin" && <ReportsInbox />}
         {user?.role === "admin" && <AdminPanel />}
         <section>
           <h3>Veil</h3>

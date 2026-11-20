@@ -144,6 +144,25 @@ class Permission(Base):
     updated_at = Column(DateTime, default=datetime.utcnow)
 
 
+class IssueReport(Base):
+    """A problem a user reported to the admin, from inside the app.
+
+    No email, no outside service. ``context`` is JSON with the
+    auto-attached details the reporter never had to type (engine,
+    app version, screen). Users only ever see their own reports;
+    only the admin sees everyone's. Status is open or resolved.
+    """
+
+    __tablename__ = "issue_reports"
+    id = Column(Integer, primary_key=True)
+    reporter_key = Column(String(64), nullable=False, default="default")
+    title = Column(String(256), nullable=False)
+    body = Column(Text, nullable=False)
+    context = Column(Text, default="")  # JSON: {engine, app_version, screen}
+    status = Column(String(16), default="open")  # open | resolved
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
 class FaceEnrollment(Base):
     __tablename__ = "face_enrollments"
     id = Column(Integer, primary_key=True)

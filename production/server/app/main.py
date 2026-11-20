@@ -46,6 +46,7 @@ from . import voice as voice_mod
 from .db import (
     Connection,
     FaceEnrollment,
+    IssueReport,
     Memory,
     Message,
     Permission,
@@ -59,6 +60,8 @@ from .db import (
 )
 from .auth import get_current_user, require_admin
 from .llm import AriesLLMError, chat as llm_chat, describe_image
+from .memory_file import memory_file_path, read_memory_file, refresh_memory_file
+from .memory_learn import learn_from_chat
 from .permissions import (
     CAPABILITIES,
     PermissionDenied,
@@ -66,8 +69,8 @@ from .permissions import (
     require,
     set_setting,
 )
-from .personality import MEMORY_TEXT, build_system_prompt, strip_greeting_prefix
-from .search import looks_like_current_question, search_web
+from .personality import build_system_prompt, strip_greeting_prefix
+from .search import search_web
 
 app = FastAPI(title="Aries", version="0.5.0")
 
@@ -326,7 +329,7 @@ def state(db: Session = Depends(get_db), user_key: str = Depends(current_key)):
     return {
         "profile": _profile_dict(db, user_key),
         "personality": person,
-        "memory_file": MEMORY_TEXT,
+        "memory_file": read_memory_file(db, user_key),
         "memories": [
             {
                 "id": m.id,
@@ -432,7 +435,8 @@ def save_personality(body: PersonalityIn, db: Session = Depends(get_db), user_ke
 
 class ChatIn(BaseModel):
     message: str
-    use_search: bool = False
+    # None = default (search on); False = the user opted out for this turn.
+    use_search: bool | None = None
     consent: dict = {}  # e.g. {"web_search": true, "save_memory": true}
 
 
@@ -497,6 +501,83 @@ def _learnable_fact(text: str) -> str | None:
     return None
 
 
+# Turns live info cannot help. A small, explicit check — no LLM call.
+_GREETING_BARE = {
+    "hi", "hey", "hello", "yo", "sup", "hiya", "howdy",
+    "good morning", "good afternoon", "good evening", "good day",
+    "hey aries", "hi aries", "hello aries",
+    "hey how are you", "hi how are you", "hello how are you",
+    "hey whats up", "hi whats up", "how are you", "whats up",
+}
+_CHITCHAT = {
+    "thanks", "thank you", "thank u", "ok", "okay", "lol", "lmao",
+    "yes", "no", "yeah", "yep", "nah", "bye", "goodbye",
+    "good night", "goodnight", "cool", "nice", "great", "perfect",
+}
+_CREATIVE_RE = re.compile(
+    r"\b(write|tell|compose|invent|make up)\b.{0,50}\b"
+    r"(poem|story|joke|rap|song|letter|essay|tale|haiku|limerick|novel)\b"
+    r"|\broleplay\b"
+    r"|\bpretend (you are|to be|you're)\b"
+    r"|\btell me a joke\b",
+    re.IGNORECASE,
+)
+_PERSONAL_MARKER_RE = re.compile(
+    r"\b(my|mine|myself|about me|do you remember|what do you know|who am i|what am i)\b",
+    re.IGNORECASE,
+)
+_QUESTION_START_RE = re.compile(
+    r"^(what|when|where|who|whom|whose|why|how|is|are|can|could|do|does|did|"
+    r"will|would|should)\b",
+    re.IGNORECASE,
+)
+_SELF_STATEMENT_RE = re.compile(
+    r"^(my |i am |i'm |i like |i love |i study |i'm studying |i'm learning |"
+    r"i live |i work |i play |i prefer |i hate )",
+    re.IGNORECASE,
+)
+_LIVE_TRIGGER_RE = re.compile(
+    r"\b(today|yesterday|latest|news|price|how much|weather|score|release|"
+    r"current|now|2026|2027|when)\b",
+    re.IGNORECASE,
+)
+# Time/date questions are answered by the date line in the system
+# prompt, not by the web.
+_TIME_QUESTION_RE = re.compile(
+    r"\bwhat'?s the (time|date|day)\b"
+    r"|\bwhat time is it\b"
+    r"|\bwhat day is (it|today)\b"
+    r"|\bwhat'?s today'?s date\b",
+    re.IGNORECASE,
+)
+
+
+def _is_search_exempt(text: str) -> bool:
+    """True when a web search cannot help this turn: greetings and
+    chit-chat, teach commands (handled by the memory learner), pure
+    creative requests, personal questions about the user (answered
+    from the user's own vault/profile, or honestly unknown, never
+    from the web), and self-statements about the user that carry no
+    live-info trigger. A small, explicit check — no LLM call."""
+    stripped = (text or "").strip()
+    bare = re.sub(r"\s+", " ", re.sub(r"[^a-z ]", "", stripped.lower())).strip()
+    if bare in _GREETING_BARE or bare in _CHITCHAT:
+        return True
+    if stripped.lower().startswith("remember "):
+        return True
+    if _TIME_QUESTION_RE.search(stripped):
+        return True
+    if _CREATIVE_RE.search(stripped):
+        return True
+    if _PERSONAL_MARKER_RE.search(stripped) and (
+        stripped.endswith("?") or _QUESTION_START_RE.match(stripped)
+    ):
+        return True
+    if _SELF_STATEMENT_RE.match(stripped) and not _LIVE_TRIGGER_RE.search(stripped):
+        return True
+    return False
+
+
 @app.post("/api/chat", response_model=ChatOut)
 def chat_endpoint(body: ChatIn, db: Session = Depends(get_db), user_key: str = Depends(current_key)):
     text = body.message.strip()
@@ -546,12 +627,20 @@ def chat_endpoint(body: ChatIn, db: Session = Depends(get_db), user_key: str = D
                 db.add(mem)
                 db.commit()
                 pending_memory = {"id": mem.id, "text": fact, "saved": False}
+        refresh_memory_file(db, user_key)
 
-    # Web search: explicit toggle, or a question that needs fresh info.
-    want_search = body.use_search or looks_like_current_question(text)
+    # Web search is on by default: Aries checks live info for every
+    # answer. The globe toggle is an opt-out for one turn, and the
+    # exclusion check skips turns live info cannot help (greetings,
+    # vault questions, creative requests). "never" in Permissions
+    # means never — not even a prompt.
+    opted_out = body.use_search is False
+    want_search = (not opted_out) and not _is_search_exempt(text)
     sources: list[dict] = []
     searched = False
     search_context = ""
+    if want_search and get_setting(db, user_key, "web_search") == "never":
+        want_search = False
     if want_search:
         try:
             require(
@@ -578,9 +667,14 @@ def chat_endpoint(body: ChatIn, db: Session = Depends(get_db), user_key: str = D
         try:
             sources = search_web(text, max_results=5)
             searched = True
-        except Exception as exc:
+        except Exception:
             sources = []
-            search_context = f"(Web search failed: {exc}. Answer from training only and say so.)"
+            search_context = (
+                "(Live web search failed, so I could not check current "
+                "information. Answer from what I already know, and say "
+                "plainly at the start that I could not check live info, "
+                "so this may be out of date.)"
+            )
         if sources:
             lines = [
                 f"- {s['title']} ({s['publisher']}): {s['snippet']} [{s['url']}]"
@@ -636,6 +730,17 @@ def chat_endpoint(body: ChatIn, db: Session = Depends(get_db), user_key: str = D
     reply = strip_greeting_prefix(reply)
     db.add(Message(user_key=user_key, role="aries", content=reply, sources=_sources_json(sources)))
     db.commit()
+    # Auto-learn: notice durable facts about the user in ordinary chat
+    # and keep them (pending approval unless consent was given). Runs
+    # after the reply is produced, so learning never delays the answer.
+    auto_memory = learn_from_chat(
+        db, user_key, text, reply,
+        consent=bool(body.consent.get("save_memory")),
+    )
+    if auto_memory is not None:
+        refresh_memory_file(db, user_key)
+        if pending_memory is None:
+            pending_memory = auto_memory
     return ChatOut(
         reply=reply,
         sources=sources,
@@ -677,6 +782,7 @@ def add_memory(body: MemoryIn, db: Session = Depends(get_db), user_key: str = De
     mem = Memory(user_key=user_key, text=body.text.strip(), category=body.category)
     db.add(mem)
     db.commit()
+    refresh_memory_file(db, user_key)
     return {"ok": True, "id": mem.id}
 
 
@@ -687,6 +793,7 @@ def approve_memory(memory_id: int, db: Session = Depends(get_db), user_key: str 
         raise HTTPException(404, "Memory not found")
     mem.pending = False
     db.commit()
+    refresh_memory_file(db, user_key)
     return {"ok": True}
 
 
@@ -711,6 +818,7 @@ def delete_memory(memory_id: int, db: Session = Depends(get_db), user_key: str =
         raise HTTPException(404, "Memory not found")
     db.delete(mem)
     db.commit()
+    refresh_memory_file(db, user_key)
     return {"ok": True}
 
 
@@ -762,7 +870,23 @@ async def import_memories(
         else:
             skipped += 1
     db.commit()
+    refresh_memory_file(db, user_key)
     return {"ok": True, "imported": imported, "skipped": skipped}
+
+
+@app.get("/api/memories/file")
+def download_memory_file(db: Session = Depends(get_db), user_key: str = Depends(current_key)):
+    """Download the signed-in user's own memory file (.md). The file
+    is rendered from the vault, so it is always current — and it
+    belongs to this account only, like the vault itself."""
+    text = read_memory_file(db, user_key)
+    if not text:
+        raise HTTPException(404, "No memories yet — nothing to download.")
+    return FileResponse(
+        memory_file_path(user_key),
+        media_type="text/markdown",
+        filename="aries-memory.md",
+    )
 
 
 # ---------------------------------------------------------------- tasks
@@ -853,6 +977,122 @@ def save_permission(body: PermissionIn, db: Session = Depends(get_db), user_key:
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     return {"ok": True, "capability": body.capability, "setting": setting}
+
+
+# ---------------------------------------------------------------- issue reports
+
+# Users report problems to the admin (Epsilon) from inside the app —
+# no email, no outside service. A report carries the reporter's
+# account, the time, and auto-attached context (engine, app version,
+# screen) so nobody has to type it. Users only ever see their own
+# reports; only the admin sees everyone's.
+
+
+class ReportIn(BaseModel):
+    title: str
+    body: str
+    context: dict = {}
+
+
+def _report_dict(r: IssueReport, include_reporter: bool = False) -> dict:
+    try:
+        ctx = json.loads(r.context) if r.context else {}
+    except Exception:
+        ctx = {}
+    if not isinstance(ctx, dict):
+        ctx = {}
+    out = {
+        "id": r.id,
+        "title": r.title,
+        "body": r.body,
+        "context": ctx,
+        "status": r.status,
+        "created_at": r.created_at.isoformat() if r.created_at else None,
+    }
+    if include_reporter:
+        out["reporter"] = r.reporter_key
+    return out
+
+
+@app.post("/api/reports")
+def submit_report(body: ReportIn, db: Session = Depends(get_db), user_key: str = Depends(current_key)):
+    title = (body.title or "").strip()
+    text = (body.body or "").strip()
+    if not title:
+        raise HTTPException(400, "Give the issue a short title.")
+    if not text:
+        raise HTTPException(400, "Say what happened.")
+    if len(title) > 200:
+        raise HTTPException(400, "Keep the title under 200 characters.")
+    if len(text) > 5000:
+        raise HTTPException(400, "Keep the description under 5000 characters.")
+    ctx = dict(body.context or {})
+    ctx.setdefault("app_version", app.version)
+    rep = IssueReport(
+        reporter_key=user_key,
+        title=title,
+        body=text,
+        context=json.dumps(ctx)[:2000],
+        status="open",
+    )
+    db.add(rep)
+    db.commit()
+    return {"ok": True, "report": _report_dict(rep)}
+
+
+@app.get("/api/reports/mine")
+def my_reports(db: Session = Depends(get_db), user_key: str = Depends(current_key)):
+    rows = (
+        db.query(IssueReport)
+        .filter_by(reporter_key=user_key)
+        .order_by(IssueReport.created_at.desc(), IssueReport.id.desc())
+        .all()
+    )
+    return {"reports": [_report_dict(r) for r in rows]}
+
+
+@app.get("/api/admin/reports")
+def admin_list_reports(admin: User = Depends(require_admin), db: Session = Depends(get_db)):
+    rows = (
+        db.query(IssueReport)
+        .order_by(IssueReport.created_at.desc(), IssueReport.id.desc())
+        .all()
+    )
+    return {"reports": [_report_dict(r, include_reporter=True) for r in rows]}
+
+
+@app.post("/api/admin/reports/{report_id}/resolve")
+def admin_resolve_report(
+    report_id: int,
+    status: str | None = Query(None),
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    rep = db.query(IssueReport).filter_by(id=report_id).first()
+    if not rep:
+        raise HTTPException(404, "No such report.")
+    if status is None:
+        rep.status = "resolved" if rep.status == "open" else "open"
+    elif status in ("open", "resolved"):
+        rep.status = status
+    else:
+        raise HTTPException(400, "Status must be open or resolved.")
+    db.commit()
+    return {"ok": True, "report": _report_dict(rep, include_reporter=True)}
+
+
+@app.delete("/api/admin/reports/{report_id}")
+def admin_delete_report(
+    report_id: int,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    rep = db.query(IssueReport).filter_by(id=report_id).first()
+    if not rep:
+        raise HTTPException(404, "No such report.")
+    db.delete(rep)
+    db.commit()
+    return {"ok": True}
 
 
 # ---------------------------------------------------------------- connections (Gmail / Spotify OAuth)
