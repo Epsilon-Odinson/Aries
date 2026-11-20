@@ -3,10 +3,17 @@
 Aries is a Python PC desktop AI companion. The web front's look
 on the desktop — deep purple, the exact visor face, the stacked
 greeting lockup, a minimal main view with only the composer —
-voice and face-recognition login, a permissions system for
+voice chat, face-recognition login, a permissions system for
 sensitive actions, and a mini mode — built one module at a time.
 
 **Greeting:** "Aries active. Ready to cook."
+
+**0.5.0: the desktop is now a client of the same Render backend
+the web app uses** — so it has ALL the web app's abilities:
+voice chat, all four Settings tabs, live info, the web front's
+real baked-grain background and artwork, and a Sources button
+under replies that carry sources. The NVIDIA key (keyring) stays
+as a fallback when the server cannot be reached.
 
 ## What works so far (Module 1)
 
@@ -20,14 +27,15 @@ sensitive actions, and a mini mode — built one module at a time.
 - PyQt5 main window in the web front's deep purple
   (`#0d0010` / `#7b2fff` / `#f6ecd9` cream), greeting lockup
   "ARIES / active / Ready to cook." on launch
-- Veil background instead of code rain: deep purple with a
-  vignette and a soft purple glow behind the face (~16 fps,
-  no pause control — the animation just runs). The old green
-  code rain is gone — the user said the background sucked,
-  and he was right. (The web front's baked grain texture and
-  artwork image cannot ship in the desktop build — the
-  snapshot push cannot carry binary image files — so the
-  desktop uses flat deep purple instead.)
+- Veil background instead of code rain: the web front's real
+  baked-grain background and artwork, decoded from the base64
+  text in `aries/veil_images.py` (the same images as the web
+  front's `veilImages.js` — grain cover-fit as the base, the
+  artwork revealed through a radial mask with a purple rim,
+  a slow idle drift, and a 750 ms burst on tap). Deep purple
+  `#0d0010` sits underneath so any uncovered area still matches.
+  The old green code rain is gone — the user said the background
+  sucked, and he was right.
 - The exact visor face from the web front (drawn with
   QPainter, no image files): an angular hexagonal shell, one
   eye band, a chin light strip, faint circuitry and a scanning
@@ -204,10 +212,67 @@ sensitive actions, and a mini mode — built one module at a time.
   (it works on the website). What PyQt5 cannot do: the web
   front's baked grain texture and its exact artwork image (the
   snapshot push cannot ship binary image files), and the web
-  front's smooth WebGL veil — the desktop uses a flat deep
-  purple with a vignette and a soft purple glow behind the face
-  instead. Everything else — chat, mini mode, Settings,
-  fullscreen — works as before.
+  front's smooth WebGL veil — the desktop paints the same grain
+  and artwork with QPainter (a slow lissajous drift, not the
+  web's exact shader) instead. Everything else — chat, mini mode,
+  Settings, fullscreen — works as before.
+
+## What changed in 0.5.0 — full web parity (backend client)
+
+The desktop is now a client of the SAME Render backend the web
+app uses (`https://aries-ahvo.onrender.com`, `aries/api_client.py`).
+No API key paste is needed on first run — the engine key stays
+server-side only. The direct NVIDIA key (keyring) stays as a
+fallback when the server cannot be reached, and PC-action requests
+are routed to the local LLM (the backend does not do PC actions).
+
+- **Voice chat** (`aries/voice.py`): mic dictation via
+  SpeechRecognition + Google Speech Recognition (free, no key),
+  and talk-back via the backend `/api/tts` (ElevenLabs, turbo
+  model). The reply is spoken **sentence by sentence**: the first
+  chunk plays as soon as it is ready while the next chunk is
+  prefetched, so the voice starts fast and keeps flowing — the
+  whole reply is never synthesised before anything plays. If the
+  server voice is down, the device voice (pyttsx3 / Windows SAPI)
+  takes over, also chunk by chunk. The **Talk back** toggle is
+  honoured, and the **Wake phrase** toggle listens for "Hey Aries"
+  in the background.
+- **Settings parity** — all four web gear tabs, nothing dropped:
+  **Aries** (profile, personality preset + warmth/directness/humour
+  sliders + notes, ElevenLabs voice picker with Hear/Use/default,
+  device voices with Hear/Use/default, Talk back / Wake phrase /
+  Search the web toggles, Desktop section with the NVIDIA key
+  field + PC control toggle), **Memory** (vault list/search/add/
+  delete + chat history), **More** (veil grain + burst, tasks,
+  permissions, face login, screenshot, installer), **Connections**
+  (Gmail/Spotify/WhatsApp status + Connect/Disconnect — Connect
+  opens the system browser to the OAuth URL, never a fake login).
+- **Live info**: chat sends `web_search=true` when the question
+  needs live/current info (mirroring the web toggle; on by default
+  for current questions). Replies that carry sources show the full
+  answer text first, then a **"Sources (n)"** pill button under it
+  that expands/collapses the source links.
+- **The real veil**: the web front's exact baked grain and artwork
+  (`aries/veil_images.py`, base64 text copied from
+  `veilImages.js` — ~2.8 MB of text, snapshot-pushable), painted
+  by `VeilWidget`: grain cover-fit, artwork through a radial mask
+  with a purple rim, slow idle drift, 750 ms click burst.
+- **Mini mode, voice-activated only**: a frameless, transparent,
+  borderless window showing ONLY the visor face, floating
+  bottom-right with a clear gap above the taskbar (never touching
+  it), no title bar, no border, no text box. Tap the face (or say
+  "Hey Aries") to start voice listening; the reply is spoken.
+  Double-click the face to expand back to full mode.
+- **Permission prompts**: when the server asks for a permission
+  first (web search, ...), the app asks Allow once / Allow always /
+  Deny, like the web.
+- **First-run setup wizard** (name, voice, permission defaults —
+  never an API key) and a **face lock screen** (face or PIN) when
+  face login is on. Due-task reminders pop up as a card.
+- PC control stays exactly as in 0.4.1 (tolerant parser, plain-
+  words results, never raw JSON), and the desktop keeps the web-
+  front look, fullscreen/resizable, screenshot, installer and
+  face login.
 
 ## What changed in 0.4.0 — PC control, API-key Settings, Windows .exe
 
@@ -240,11 +305,14 @@ sensitive actions, and a mini mode — built one module at a time.
 
 Every `v*-desktop` tag publishes a Release with `Aries.exe`
 attached: open the repo's **Releases** page and download the
-latest one. Run it — no install needed. On first run, open
-Settings (gear icon, top right) and paste your NVIDIA API key.
+latest one. Run it — no install needed. On first run the setup
+wizard asks for your name and voice — no API key is needed, the
+engine key stays server-side. (A key in Settings is only the
+fallback for when the server cannot be reached.)
 
-Still to come: voice (Module 3), face-recognition login (Module 4),
-permissions system (Module 5), full mini mode (Module 6).
+Still to come: more of the free skills (study, CODM, Spotify,
+money trackers, routine trackers, Bible verse, French practice —
+build order still to be decided).
 
 ## Setup on Windows
 
@@ -261,10 +329,14 @@ permissions system (Module 5), full mini mode (Module 6).
    pip install -r requirements.txt
    ```
 
-## Set your NVIDIA API key
+## Set your NVIDIA API key (fallback only)
 
-The key is **never** stored in code, in a document, or in this repo.
-Aries reads it from the `NVIDIA_API_KEY` environment variable first,
+Since 0.5.0 the desktop talks to the Render backend first, so
+**no API key is needed on first run** — the engine key stays
+server-side only. The key below is only the **fallback** for when
+the server cannot be reached, and for PC-action requests (which
+the backend does not do). If you want that fallback, Aries reads
+the key from the `NVIDIA_API_KEY` environment variable first,
 then from the OS credential store (keyring) if available.
 
 To set it as a Windows user environment variable:
@@ -311,24 +383,33 @@ python -m aries.main --cli
 
 Type `quit` to exit the CLI loop.
 
-If the key is not set, the UI does not crash — it shows the setup
-steps in the chat pane. Set the key (see above), then press
-**Check key again** in the UI.
+If the key is not set and the server cannot be reached, the UI
+does not crash — it shows the setup steps in the chat pane. Set
+the key (see above), then press **Check key again** in the UI.
 
 ## Project layout
 
 ```
 aries/
-  __init__.py    Package marker, version
+  __init__.py    Package marker, version (0.5.0)
+  api_client.py  Render backend client: chat, web search, TTS,
+                 state, memories, tasks, permissions, connections,
+                 voices, face login, screenshot
   config.py      API key loading (env, then keyring) and saving,
                  never prints the key
   llm.py         NVIDIA chat client, clear errors on 401 / 429 / 410
   main.py        Entry point: UI by default, --cli for the text loop
   pc_control.py  PC control (desktop only): defined command set,
                  max 5 steps, confirmation before acting
-  ui.py          PyQt5 window: JARVIS HUD background, animated
-                 robot face, chat pane, worker thread, mini-mode stub,
-                 Settings dialog (API key + PC control toggle)
+  ui.py          PyQt5 window: real veil background (baked grain +
+                 artwork), exact visor face, chat with Sources
+                 buttons, worker threads, voice-only mini mode,
+                 Settings dialog (Aries / Memory / More / Connections),
+                 lock screen, setup wizard
+  veil_images.py The web front's grain + artwork as base64 text
+  voice.py       Voice chat: SpeechRecognition dictation, wake
+                 phrase, chunked + prefetched ElevenLabs talk-back
+                 (pygame), device-voice fallback (pyttsx3)
 run_aries.py     Entry point for the PyInstaller .exe build
 .github/workflows/build-windows.yml   Windows .exe build + Release
 requirements.txt

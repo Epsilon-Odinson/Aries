@@ -34,7 +34,19 @@ pc-actions block is parsed tolerantly, executed, and replaced by
 a plain-words result), and restyles the desktop to the current
 web front — deep purple, the exact visor SVG, the stacked
 greeting lockup, and the minimal main view.
+0.5.0 turns the desktop into a client of the SAME Render backend
+the web app uses — full web parity: voice chat (mic dictation +
+chunked, prefetched ElevenLabs talk-back, so the voice starts
+fast), all four Settings tabs (Aries, Memory, More, Connections),
+live info (web_search on current questions), the web front's
+real baked-grain background and artwork veil (from
+veilImages.js, as base64 in aries/veil_images.py), a Sources
+button under replies that carry sources, and a frameless,
+transparent, voice-activated-only mini mode floating above the
+taskbar. The direct NVIDIA key (keyring) stays as a fallback
+when the backend is unreachable; PC-action requests are routed
+to the local LLM, because the backend does not do PC actions.
 """
 
-__version__ = "0.4.1"
+__version__ = "0.5.0"
 __all__ = ["__version__"]

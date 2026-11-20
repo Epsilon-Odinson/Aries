@@ -8,7 +8,7 @@
 ; The workflow builds this with Inno Setup (choco install innosetup).
 
 #define MyAppName "Aries"
-#define MyAppVersion "0.4.1"
+#define MyAppVersion "0.5.0"
 #define MyAppPublisher "Epsilon"
 #define MyAppExeName "Aries.exe"
 

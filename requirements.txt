@@ -1,4 +1,4 @@
-# Aries — Module 1 dependencies (Windows, Python 3.11+)
+# Aries — desktop dependencies (Windows, Python 3.11+)
 # No dlib / face-recognition yet — that comes with the face-login module.
 PyQt5==5.15.11
 requests==2.32.3
@@ -8,3 +8,15 @@ keyring>=24.3,<26
 pyautogui==0.9.54
 psutil>=6.1,<8
 pyperclip==1.9.0
+# Voice chat (0.5.0) — dictation + talk-back
+# SpeechRecognition + PyAudio: mic dictation via Google Speech
+# Recognition (free, no key). pygame: ElevenLabs MP3 playback,
+# sentence by sentence with prefetch. pyttsx3: the device-voice
+# fallback when the server voice is unavailable. opencv-python-headless:
+# optional webcam capture for face login (a photo file always works
+# without it).
+SpeechRecognition==3.10.4
+PyAudio==0.2.14
+pygame==2.6.1
+pyttsx3==2.90
+opencv-python-headless==4.8.1.78
