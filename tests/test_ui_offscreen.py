@@ -167,9 +167,12 @@ class UiTestCase(unittest.TestCase):
             self.assertIsInstance(window._input, QLineEdit)
             self.assertIsInstance(window._mic_btn, QPushButton)
             self.assertEqual(window._send_btn.text(), "Send")
-            # Settings gear + fullscreen button, top-right.
+            # Settings gear, top-right — the web has only the gear
+            # here (fullscreen is F11 / Esc, no button).
             self.assertIsInstance(window._settings_btn, QPushButton)
-            self.assertIsInstance(window._fs_btn, QPushButton)
+            self.assertFalse(hasattr(window, "_fs_btn"),
+                             "0.6.0 web parity: no fullscreen button on "
+                             "the main view")
         finally:
             window.close()
 
@@ -232,7 +235,7 @@ class UiTestCase(unittest.TestCase):
         try:
             btn = widget._btn
             self.assertIsNotNone(btn, "a reply with sources needs a button")
-            self.assertEqual(btn.text(), "Sources (2)")
+            self.assertEqual(btn.text(), "Sources (2) ▾")
             self.assertFalse(widget._panel.isVisible(),
                              "sources start collapsed")
             btn.click()
@@ -267,7 +270,7 @@ class UiTestCase(unittest.TestCase):
             buttons = [b for b in window._chat.findChildren(QPushButton)
                        if b.text().startswith("Sources")]
             self.assertEqual(len(buttons), 1)
-            self.assertEqual(buttons[0].text(), "Sources (1)")
+            self.assertEqual(buttons[0].text(), "Sources (1) ▾")
         finally:
             window.close()
 

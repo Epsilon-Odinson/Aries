@@ -8,6 +8,21 @@ sensitive actions, and a mini mode — built one module at a time.
 
 **Greeting:** "Aries active. Ready to cook."
 
+**0.7.0: the desktop is now an Electron shell around the SAME React
+code as the web** — bundled locally into the installed app, never
+the live site in a window. The shell (`aries-shell/`, Electron)
+renders the React app from local files, so the desktop is
+pixel-identical to the web by construction: same veil (real WebGL),
+same pointer orb, same fonts, same Settings, same Sources button.
+A local Python service (`aries/service.py`, on 127.0.0.1) gives the
+frontend the desktop-only powers: full PC control (25 actions, max
+5 steps, confirmation before acting, twice for destructive), the
+microphone (capture in a helper subprocess, so a bad audio driver
+can never close the app), and the "Hey Aries" wake phrase. Chat,
+web search, memory, tasks, ElevenLabs voice and face login go to
+the Render backend directly, exactly like the web. The PyQt UI
+(`aries/ui.py`) is legacy and no longer used by the shell.
+
 **0.5.0: the desktop is now a client of the same Render backend
 the web app uses** — so it has ALL the web app's abilities:
 voice chat, all four Settings tabs, live info, the web front's

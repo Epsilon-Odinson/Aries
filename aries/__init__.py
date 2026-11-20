@@ -34,19 +34,25 @@ pc-actions block is parsed tolerantly, executed, and replaced by
 a plain-words result), and restyles the desktop to the current
 web front — deep purple, the exact visor SVG, the stacked
 greeting lockup, and the minimal main view.
-0.5.0 turns the desktop into a client of the SAME Render backend
-the web app uses — full web parity: voice chat (mic dictation +
-chunked, prefetched ElevenLabs talk-back, so the voice starts
-fast), all four Settings tabs (Aries, Memory, More, Connections),
-live info (web_search on current questions), the web front's
-real baked-grain background and artwork veil (from
-veilImages.js, as base64 in aries/veil_images.py), a Sources
-button under replies that carry sources, and a frameless,
-transparent, voice-activated-only mini mode floating above the
-taskbar. The direct NVIDIA key (keyring) stays as a fallback
-when the backend is unreachable; PC-action requests are routed
-to the local LLM, because the backend does not do PC actions.
+0.6.0 fixes the bugs the user reported on 0.5.0 — the mic crash
+(the mic is now probed/captured in a helper subprocess, so a
+PortAudio fault can never kill the app; a ListenWorker that raises
+anything now reports it in plain words), mini mode (a press on
+the face expands back to full scale; voice is the wake phrase
+only), exact web parity (topline, greeting sizes, latest-reply-
+only chat, notice bar, pill tabs, pill toggles, "Settings / More"
+header), a 60fps pointer orb on a cached veil, the "© Made by
+Epsilon" stamp, and full PC control (25 actions: open URL, window
+minimise/maximise/restore/close, volume, media keys, screenshot,
+lock PC, open a Settings page — still max 5 steps, confirmation
+before acting, twice for destructive actions).
+0.7.0 replaces the PyQt desktop with an Electron shell that runs
+the SAME React code as the web, bundled locally (never the live
+site in a window) — pixel-identical UI by construction — plus a
+local Python service (aries/service.py) on 127.0.0.1 for PC control,
+microphone and wake phrase. The PyQt UI (aries/ui.py) is legacy
+and no longer used by the shell.
 """
 
-__version__ = "0.5.0"
+__version__ = "0.7.0"
 __all__ = ["__version__"]

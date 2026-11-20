@@ -2,11 +2,15 @@
 
 Speech-to-text: SpeechRecognition + the microphone (PyAudio) with
 Google Speech Recognition — free, no key, works over the internet.
-That is the fewest-moving-parts choice that actually works on
-Windows: PyAudio ships prebuilt wheels for Python 3.11, and the
-Google recogniser needs no account. (Local Whisper would need a
-~150 MB model download plus torch — heavier, slower to start, and
-no better for short commands — so it is not used.)
+The microphone NEVER opens in this process: capture runs in a
+helper child process (aries/mic_worker.py, re-invoking the app with
+a hidden --mic-* flag) that writes a WAV file, and this process
+only transcribes that file. A bad audio driver used to segfault the
+whole app the moment the mic was listed or opened — now it can
+only kill the child, and the app reports "the mic isn't available"
+in plain words and stays open. (Local Whisper would need a ~150 MB
+model download plus torch — heavier, slower to start, and no better
+for short commands — so it is not used.)
 
 Talk-back: the backend /api/tts (ElevenLabs turbo model, real
 narrator voice, MP3) played with pygame — CHUNKED with prefetch,
@@ -17,9 +21,10 @@ When the backend voice is not available, the fallback is the
 device's own voices via pyttsx3 (Windows SAPI) — the desktop
 equivalent of the web app's browser-voice fallback.
 
-Wake phrase: "Hey Aries" is listened for in the background with
-speech_recognition's listen_in_background. It only runs while the
-Wake phrase toggle is on.
+Wake phrase: "Hey Aries" is listened for by a helper child process
+(aries/mic_worker.py --mic-wake) that prints WAKE each time it
+hears the phrase; this process only reads the child's stdout. It
+only runs while the Wake phrase toggle is on.
 
 Nothing here touches a widget. The UI runs the blocking calls
 (listen_once, speak) from QThreads and marshals results back with
@@ -31,11 +36,88 @@ instead of crashing — the UI then says so and offers typing.
 from __future__ import annotations
 
 import io
+import json
 import os
+import subprocess
+import sys
 import tempfile
 import threading
+import time
 
 from .api_client import BackendClient, VoiceNotConfigured
+
+# How long a successful mic probe stays trusted (the probe spawns a
+# child process, so re-probing on every tap would feel slow).
+_PROBE_CACHE_SECONDS = 60.0
+# Hard cap for the probe child (Python start + PortAudio init is
+# normally 1-2 s; a bad driver can hang, so never wait forever).
+_PROBE_TIMEOUT = 25.0
+
+
+def _mic_cmd(*args: str) -> list[str]:
+    """Command that runs this app's mic helper in a child process.
+
+    In dev it is ``python -m aries.main <flag>``; in the frozen .exe
+    the exe re-invokes itself with the flag. Either way the child is
+    the same code (aries/mic_worker.py) — the parent never touches
+    PortAudio, so a native audio crash can only kill the child.
+    """
+    if getattr(sys, "frozen", False):
+        return [sys.executable, *args]
+    return [sys.executable, "-m", "aries.main", *args]
+
+
+def _run_mic_probe() -> tuple[bool, str]:
+    """Probe the mic in a child process. (ok, reason).
+
+    The child lists microphones and opens the default one. If it
+    crashes (a native PortAudio fault) or times out, the mic is
+    reported unavailable — the main app never sees the crash.
+    """
+    try:
+        proc = subprocess.run(
+            _mic_cmd("--mic-probe"),
+            capture_output=True, text=True, timeout=_PROBE_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        return False, (
+            "The microphone did not answer in time — the audio driver "
+            "may be stuck. Try again, or type your message.")
+    except OSError as exc:
+        return False, f"Could not start the microphone helper: {exc}"
+    out = (proc.stdout or "").strip()
+    try:
+        data = json.loads(out.splitlines()[-1]) if out else {}
+    except (ValueError, IndexError):
+        data = {}
+    if proc.returncode == 0 and data.get("ok"):
+        return True, ""
+    why = str(data.get("why") or "").strip()
+    if not why:
+        why = (
+            "The microphone could not be opened on this PC. Check it "
+            "is plugged in and no other app is using it.")
+    return False, why
+
+
+# Last good probe, so tapping the mic twice does not re-spawn.
+_probe_cache: dict = {"at": 0.0, "ok": False, "why": ""}
+
+
+def _mic_available() -> tuple[bool, str]:
+    """True when a microphone can be used (probed in a child process).
+
+    The main process never imports PyAudio or opens a mic — that is
+    the whole point: a bad audio driver can no longer kill the app.
+    """
+    now = time.monotonic()
+    if now - _probe_cache.get("at", 0.0) < _PROBE_CACHE_SECONDS:
+        return _probe_cache["ok"], _probe_cache["why"]
+    ok, why = _run_mic_probe()
+    # Only cache a success (a failure may clear up — a plugged-in
+    # mic, a freed device — so the next tap re-probes).
+    if ok:
+        _probe_cache.update({"at": now, "ok": True, "why": ""})
+    return ok, why
 
 
 class VoiceError(RuntimeError):
@@ -77,30 +159,14 @@ def split_sentences(text: str, max_chars: int = 400) -> list[str]:
     return out or [text]
 
 
-def _mic_available() -> tuple[bool, str]:
-    """True when SpeechRecognition + a microphone can be used."""
-    try:
-        import speech_recognition as sr
-    except ImportError:
-        return False, "SpeechRecognition is not installed."
-    try:
-        import pyaudio  # noqa: F401  (sr.Microphone needs it)
-    except ImportError:
-        return False, (
-            "PyAudio is not installed, so the microphone cannot be used. "
-            "Install it with: pip install -r requirements.txt"
-        )
-    try:
-        names = sr.Microphone.list_microphone_names()
-    except Exception as exc:
-        return False, f"Could not list microphones: {exc}"
-    if not names:
-        return False, "No microphone was found on this PC."
-    return True, ""
-
-
 class VoiceEngine:
-    """Speech in, speech out. Blocking calls — run them off the UI thread."""
+    """Speech in, speech out. Blocking calls — run them off the UI thread.
+
+    The microphone NEVER opens in this process: capture runs in a
+    helper child process (aries/mic_worker.py) so a bad audio driver
+    cannot kill the app. Transcription (Google, from a WAV file) and
+    talk-back (pygame / pyttsx3) are safe in-process.
+    """
 
     def __init__(self, client: BackendClient | None = None) -> None:
         self.client = client
@@ -109,9 +175,8 @@ class VoiceEngine:
         self._speaking = False
         self._speak_lock = threading.Lock()
         self._stop_flag = threading.Event()
-        self._wake_stop = None  # stop function from listen_in_background
-        self._wake_recognizer = None
-        self._wake_mic = None
+        self._wake_proc = None  # subprocess.Popen for --mic-wake
+        self._wake_reader = None  # thread reading the wake child's stdout
         self._pyttsx3_engine = None
         self._device_voice_id: str | None = None
 
@@ -124,33 +189,63 @@ class VoiceEngine:
                     phrase_time_limit: float = 20.0) -> str | None:
         """Listen once and return the transcribed text.
 
-        Returns None when nothing was heard / nothing was understood
-        (the caller says "didn't catch that"). Raises VoiceError when
-        the mic or the network is the problem.
+        Capture runs in a helper child process (mic_worker
+        --mic-record) that writes a WAV file; this process only
+        transcribes that file with Google — no PortAudio here, so a
+        bad audio driver can never kill the app. Returns None when
+        nothing was heard / nothing was understood (the caller says
+        "didn't catch that"). Raises VoiceError when the mic or the
+        network is the problem.
         """
         ok, why = self.mic_available()
         if not ok:
             raise VoiceError(why)
         import speech_recognition as sr
 
-        recognizer = sr.Recognizer()
-        # Shorter pauses: the user talks in short bursts.
-        recognizer.pause_threshold = 0.8
-        recognizer.non_speaking_duration = 0.5
+        tmp = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+        wav_path = tmp.name
+        tmp.close()
         try:
-            with sr.Microphone() as source:
-                recognizer.adjust_for_ambient_noise(source, duration=0.5)
-                audio = recognizer.listen(
-                    source, timeout=timeout,
-                    phrase_time_limit=phrase_time_limit)
-        except sr.WaitTimeoutError:
-            return None
-        except OSError as exc:
-            raise VoiceError(
-                f"Could not open the microphone: {exc}. Check the mic "
-                "is plugged in and no other app is using it."
-            ) from exc
-        return self._transcribe(recognizer, audio)
+            record_timeout = timeout + phrase_time_limit + 20.0
+            try:
+                proc = subprocess.run(
+                    _mic_cmd("--mic-record", wav_path,
+                             str(timeout), str(phrase_time_limit)),
+                    capture_output=True, text=True,
+                    timeout=record_timeout)
+            except subprocess.TimeoutExpired:
+                raise VoiceError(
+                    "Listening took too long — the microphone did not "
+                    "answer. Try again, or type your message.") from None
+            except OSError as exc:
+                raise VoiceError(
+                    f"Could not start the microphone helper: {exc}") from exc
+            out = (proc.stdout or "").strip()
+            try:
+                data = json.loads(out.splitlines()[-1]) if out else {}
+            except (ValueError, IndexError):
+                data = {}
+            if proc.returncode != 0 or not data.get("ok"):
+                raise VoiceError(
+                    str(data.get("why") or
+                        "The microphone could not be opened on this PC. "
+                        "Check it is plugged in and no other app is "
+                        "using it."))
+            if not data.get("heard"):
+                return None
+            recognizer = sr.Recognizer()
+            try:
+                with sr.AudioFile(wav_path) as source:
+                    audio = recognizer.record(source)
+            except Exception as exc:
+                raise VoiceError(
+                    f"Could not read the recording: {exc}") from exc
+            return self._transcribe(recognizer, audio)
+        finally:
+            try:
+                os.unlink(wav_path)
+            except OSError:
+                pass
 
     def _transcribe(self, recognizer, audio) -> str | None:
         """Google Speech Recognition on captured audio."""
@@ -177,49 +272,61 @@ class VoiceEngine:
     # -- wake phrase ---------------------------------------------------------
     def start_wake(self, on_wake) -> None:
         """Listen in the background for "Hey Aries". on_wake() is called
-        (from the recogniser thread) each time the phrase is heard.
-        Call stop_wake() to end it. Raises VoiceError when the mic is
-        not usable."""
-        if self._wake_stop is not None:
+        (from the reader thread) each time the phrase is heard. Call
+        stop_wake() to end it. Raises VoiceError when the mic is not
+        usable.
+
+        The listener is a helper child process (--mic-wake) that
+        prints WAKE per hearing; this process only reads its stdout.
+        No PortAudio runs here, so a bad driver cannot kill the app.
+        """
+        if self._wake_proc is not None:
             return  # Already listening.
         ok, why = self.mic_available()
         if not ok:
             raise VoiceError(why)
-        import speech_recognition as sr
+        try:
+            proc = subprocess.Popen(
+                _mic_cmd("--mic-wake"),
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                text=True, bufsize=1)
+        except OSError as exc:
+            raise VoiceError(
+                f"Could not start the microphone helper: {exc}") from exc
+        self._wake_proc = proc
 
-        recognizer = sr.Recognizer()
-        recognizer.pause_threshold = 0.8
-        mic = sr.Microphone()
-        self._wake_recognizer = recognizer
-        self._wake_mic = mic
-
-        def _callback(_rec, audio):
+        def _reader():
             try:
-                text = self._transcribe(recognizer, audio)
-            except VoiceError:
-                return
-            if text and "hey aries" in text.lower():
-                try:
-                    on_wake()
-                except Exception:
-                    pass
-
-        # listen_in_background spawns its own thread and returns a
-        # stop function. It keeps listening until that is called.
-        self._wake_stop = recognizer.listen_in_background(mic, _callback)
-
-    def stop_wake(self) -> None:
-        if self._wake_stop is not None:
-            try:
-                self._wake_stop(wait_for_stop=False)
+                for line in proc.stdout:
+                    if line.strip() == "WAKE":
+                        try:
+                            on_wake()
+                        except Exception:
+                            pass
             except Exception:
                 pass
-            self._wake_stop = None
-        self._wake_recognizer = None
-        self._wake_mic = None
+
+        thread = threading.Thread(target=_reader, daemon=True)
+        thread.start()
+        self._wake_reader = thread
+
+    def stop_wake(self) -> None:
+        if self._wake_proc is None:
+            return
+        proc = self._wake_proc
+        self._wake_proc = None
+        self._wake_reader = None
+        try:
+            proc.terminate()
+            try:
+                proc.wait(timeout=2.0)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+        except Exception:
+            pass
 
     def wake_active(self) -> bool:
-        return self._wake_stop is not None
+        return self._wake_proc is not None
 
     # -- talk-back -------------------------------------------------------------
     def _ensure_pygame(self) -> bool:

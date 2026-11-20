@@ -16,9 +16,15 @@ from __future__ import annotations
 
 import os
 
-from dotenv import load_dotenv
+try:
+    from dotenv import load_dotenv
 
-load_dotenv()  # Loads a local .env file if present (.env is gitignored).
+    load_dotenv()  # Loads a local .env file if present (.env is gitignored).
+except ImportError:
+    # dotenv is optional — without it, keys still come from the
+    # environment and the OS credential store. The local service
+    # must never die because an optional helper is missing.
+    pass
 
 API_BASE_URL = "https://integrate.api.nvidia.com/v1"
 # CHAT_MODEL was meta/llama-3.1-70b-instruct in the original spec, but

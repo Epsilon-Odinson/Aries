@@ -1,9 +1,12 @@
 """PC control for Aries — desktop only.
 
-An operating agent: the desktop app can open apps and files, type,
-move/click/scroll the mouse, use the clipboard, run shell commands,
-read/write files and report system info. This is the defined command
-set from the fixed build spec — nothing else.
+An operating agent: the desktop app can open apps, files and URLs,
+type, press keys and hotkeys, move/click/scroll the mouse, use the
+clipboard, run shell commands, read/write files, report system
+info, control windows (minimise/maximise/restore/close), volume
+and media keys, take screenshots, lock the PC and open Windows
+Settings pages. This is the defined command set from the fixed
+build spec, expanded in 0.6.0 — nothing else.
 
 Rules (fixed spec, autonomy section):
 - Max 5 agent steps per command (:data:`MAX_STEPS`).
@@ -48,7 +51,9 @@ SHELL_TIMEOUT = 30  # seconds per shell command
 ACTIONS = {
     "open_app",
     "open_path",
+    "open_url",
     "type_text",
+    "press_keys",
     "mouse_move",
     "mouse_click",
     "mouse_scroll",
@@ -58,13 +63,26 @@ ACTIONS = {
     "read_file",
     "write_file",
     "system_info",
+    "window_minimise",
+    "window_maximise",
+    "window_restore",
+    "window_close",
+    "volume_up",
+    "volume_down",
+    "volume_mute",
+    "media_key",
+    "screenshot",
+    "lock_pc",
+    "open_settings",
 }
 
 # Required fields per action (besides "action" itself).
 _REQUIRED = {
     "open_app": ("name",),
     "open_path": ("path",),
+    "open_url": ("url",),
     "type_text": ("text",),
+    "press_keys": ("keys",),
     "mouse_move": ("x", "y"),
     "mouse_click": ("x", "y"),
     "mouse_scroll": ("amount",),
@@ -74,6 +92,17 @@ _REQUIRED = {
     "read_file": ("path",),
     "write_file": ("path", "text"),
     "system_info": (),
+    "window_minimise": (),
+    "window_maximise": (),
+    "window_restore": (),
+    "window_close": (),
+    "volume_up": (),
+    "volume_down": (),
+    "volume_mute": (),
+    "media_key": ("key",),
+    "screenshot": (),
+    "lock_pc": (),
+    "open_settings": (),
 }
 
 # Shell text that means "destroy something". Matched case-insensitively
@@ -320,6 +349,37 @@ def describe_action(step: dict) -> str:
         return f"Open the app “{step.get('name', '')}”"
     if action == "open_path":
         return f"Open “{step.get('path', '')}”"
+    if action == "open_url":
+        return f"Open {step.get('url', '')} in the browser"
+    if action == "press_keys":
+        keys = step.get("keys", "")
+        if isinstance(keys, (list, tuple)):
+            keys = "+".join(str(k) for k in keys)
+        return f"Press the keys {keys}"
+    if action == "window_minimise":
+        return "Minimise the focused window"
+    if action == "window_maximise":
+        return "Maximise the focused window"
+    if action == "window_restore":
+        return "Restore the focused window to its normal size"
+    if action == "window_close":
+        return "Close the focused window"
+    if action == "volume_up":
+        return "Turn the volume up"
+    if action == "volume_down":
+        return "Turn the volume down"
+    if action == "volume_mute":
+        return "Mute / unmute the sound"
+    if action == "media_key":
+        return f"Media key: {step.get('key', '')}"
+    if action == "screenshot":
+        path = str(step.get("path", "")).strip()
+        return f"Take a screenshot" + (f" and save it to “{path}”" if path else "")
+    if action == "lock_pc":
+        return "Lock the PC"
+    if action == "open_settings":
+        page = str(step.get("page", "")).strip()
+        return f"Open Settings" + (f" — {page}" if page else "")
     if action == "type_text":
         text = str(step.get("text", ""))
         shown = text if len(text) <= 60 else text[:57] + "…"
@@ -687,10 +747,229 @@ def _run_system_info(step: dict) -> str:
     return "System info: " + "; ".join(parts) + "."
 
 
+# --- new actions (0.6.0): full PC control --------------------------------
+
+_SETTINGS_PAGES = {
+    "bluetooth": "ms-settings:bluetooth",
+    "wifi": "ms-settings:network-wifi",
+    "wi-fi": "ms-settings:network-wifi",
+    "network": "ms-settings:network",
+    "display": "ms-settings:display",
+    "sound": "ms-settings:sound",
+    "audio": "ms-settings:sound",
+    "apps": "ms-settings:appsfeatures",
+    "windows update": "ms-settings:windowsupdate",
+    "update": "ms-settings:windowsupdate",
+    "privacy": "ms-settings:privacy",
+    "accounts": "ms-settings:yourinfo",
+    "personalisation": "ms-settings:personalization",
+    "personalization": "ms-settings:personalization",
+    "system": "ms-settings:system",
+    "about": "ms-settings:about",
+    "power": "ms-settings:powersleep",
+    "battery": "ms-settings:powersleep",
+    "storage": "ms-settings:storagesense",
+    "notifications": "ms-settings:notifications",
+}
+
+_MEDIA_KEYS = {
+    "play_pause": "audioplaypause",
+    "play": "audioplaypause",
+    "pause": "audioplaypause",
+    "next": "audionext",
+    "previous": "audioprev",
+    "prev": "audioprev",
+    "stop": "audiostop",
+}
+
+
+def _run_open_url(step: dict) -> str:
+    from urllib.parse import urlparse
+
+    url = str(step["url"]).strip()
+    if not url:
+        raise PcControlError("The URL is empty.")
+    parsed = urlparse(url)
+    if not parsed.scheme:
+        # "google.com" -> "https://google.com".
+        url = "https://" + url
+        parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        raise PcControlError(
+            f"That is not a web address I can open: {step['url']}")
+    import webbrowser
+
+    try:
+        opened = webbrowser.open(url)
+    except Exception as exc:
+        raise PcControlError(f"Could not open {url}: {exc}") from exc
+    if not opened:
+        raise PcControlError(
+            f"The browser did not open {url}. Is a browser installed?")
+    return f"Opened {url} in the browser."
+
+
+def _run_press_keys(step: dict) -> str:
+    keys = step["keys"]
+    if isinstance(keys, str):
+        keys = [keys]
+    if not isinstance(keys, (list, tuple)) or not keys:
+        raise PcControlError("press_keys needs a key or a list of keys.")
+    keys = [str(k).strip().lower() for k in keys]
+    if any(not k for k in keys):
+        raise PcControlError("press_keys got an empty key name.")
+    gui = _pyautogui()
+    try:
+        if len(keys) == 1:
+            gui.press(keys[0])
+        else:
+            gui.hotkey(*keys)
+    except Exception as exc:
+        raise PcControlError(
+            f"Could not press {'+'.join(keys)}: {exc}") from exc
+    return f"Pressed {'+'.join(keys)}."
+
+
+def _run_window_minimise(step: dict) -> str:
+    gui = _pyautogui()
+    try:
+        gui.hotkey("win", "down")
+    except Exception as exc:
+        raise PcControlError(f"Could not minimise the window: {exc}") from exc
+    return "Minimised the focused window."
+
+
+def _run_window_maximise(step: dict) -> str:
+    gui = _pyautogui()
+    try:
+        gui.hotkey("win", "up")
+    except Exception as exc:
+        raise PcControlError(f"Could not maximise the window: {exc}") from exc
+    return "Maximised the focused window."
+
+
+def _run_window_restore(step: dict) -> str:
+    gui = _pyautogui()
+    try:
+        gui.hotkey("alt", "space")
+        gui.press("r")
+    except Exception as exc:
+        raise PcControlError(f"Could not restore the window: {exc}") from exc
+    return "Restored the focused window."
+
+
+def _run_window_close(step: dict) -> str:
+    gui = _pyautogui()
+    try:
+        gui.hotkey("alt", "f4")
+    except Exception as exc:
+        raise PcControlError(f"Could not close the window: {exc}") from exc
+    return "Closed the focused window."
+
+
+def _run_volume_up(step: dict) -> str:
+    gui = _pyautogui()
+    try:
+        gui.press("volumeup")
+    except Exception as exc:
+        raise PcControlError(f"Could not turn the volume up: {exc}") from exc
+    return "Turned the volume up."
+
+
+def _run_volume_down(step: dict) -> str:
+    gui = _pyautogui()
+    try:
+        gui.press("volumedown")
+    except Exception as exc:
+        raise PcControlError(f"Could not turn the volume down: {exc}") from exc
+    return "Turned the volume down."
+
+
+def _run_volume_mute(step: dict) -> str:
+    gui = _pyautogui()
+    try:
+        gui.press("volumemute")
+    except Exception as exc:
+        raise PcControlError(f"Could not mute the sound: {exc}") from exc
+    return "Muted / unmuted the sound."
+
+
+def _run_media_key(step: dict) -> str:
+    key = str(step["key"]).strip().lower()
+    if key not in _MEDIA_KEYS:
+        raise PcControlError(
+            f"Unknown media key: {step['key']!r}. Use play_pause, next, "
+            "previous or stop.")
+    gui = _pyautogui()
+    try:
+        gui.press(_MEDIA_KEYS[key])
+    except Exception as exc:
+        raise PcControlError(f"Could not press the media key: {exc}") from exc
+    return f"Media key: {key}."
+
+
+def _run_screenshot(step: dict) -> str:
+    import datetime
+
+    gui = _pyautogui()
+    path = str(step.get("path", "") or "").strip()
+    if path:
+        target = Path(path).expanduser()
+        if target.suffix.lower() not in (".png", ".jpg", ".jpeg"):
+            raise PcControlError(
+                "A screenshot path must end in .png or .jpg.")
+    else:
+        folder = Path.home() / "Pictures" / "Aries"
+        stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+        target = folder / f"screenshot-{stamp}.png"
+    try:
+        if target.parent and not target.parent.exists():
+            target.parent.mkdir(parents=True, exist_ok=True)
+        shot = gui.screenshot()
+        shot.save(str(target))
+    except Exception as exc:
+        raise PcControlError(f"Could not take a screenshot: {exc}") from exc
+    return f"Screenshot saved to “{target}”."
+
+
+def _run_lock_pc(step: dict) -> str:
+    if os.name != "nt":
+        raise PcControlError(
+            "Locking the PC works on Windows only — this build "
+            "targets the Windows .exe.")
+    try:
+        import ctypes
+
+        if not ctypes.windll.user32.LockWorkStation():
+            raise PcControlError("Windows refused to lock the PC.")
+    except PcControlError:
+        raise
+    except Exception as exc:
+        raise PcControlError(f"Could not lock the PC: {exc}") from exc
+    return "Locked the PC."
+
+
+def _run_open_settings(step: dict) -> str:
+    if os.name != "nt":
+        raise PcControlError(
+            "Opening Windows Settings works on Windows only — this "
+            "build targets the Windows .exe.")
+    page = str(step.get("page", "") or "").strip().lower()
+    uri = _SETTINGS_PAGES.get(page, "ms-settings:")
+    try:
+        os.startfile(uri)  # noqa: S606 - user-confirmed target
+    except OSError as exc:
+        raise PcControlError(f"Could not open Settings: {exc}") from exc
+    shown = page or "Settings"
+    return f"Opened {shown}."
+
+
 _RUNNERS = {
     "open_app": _run_open_app,
     "open_path": _run_open_path,
+    "open_url": _run_open_url,
     "type_text": _run_type_text,
+    "press_keys": _run_press_keys,
     "mouse_move": _run_mouse_move,
     "mouse_click": _run_mouse_click,
     "mouse_scroll": _run_mouse_scroll,
@@ -700,6 +979,17 @@ _RUNNERS = {
     "read_file": _run_read_file,
     "write_file": _run_write_file,
     "system_info": _run_system_info,
+    "window_minimise": _run_window_minimise,
+    "window_maximise": _run_window_maximise,
+    "window_restore": _run_window_restore,
+    "window_close": _run_window_close,
+    "volume_up": _run_volume_up,
+    "volume_down": _run_volume_down,
+    "volume_mute": _run_volume_mute,
+    "media_key": _run_media_key,
+    "screenshot": _run_screenshot,
+    "lock_pc": _run_lock_pc,
+    "open_settings": _run_open_settings,
 }
 
 
@@ -762,7 +1052,9 @@ must only ever see plain words and results, never raw JSON.
 Actions and their fields:
 - open_app: {"action": "open_app", "name": "notepad"} — app name or .exe
 - open_path: {"action": "open_path", "path": "C:\\Users\\Epsilon\\file.txt"} — file or folder
+- open_url: {"action": "open_url", "url": "https://example.com"} — opens in the browser
 - type_text: {"action": "type_text", "text": "hello"} — types into the focused window
+- press_keys: {"action": "press_keys", "keys": ["ctrl", "c"]} — one key, or a hotkey combo
 - mouse_move: {"action": "mouse_move", "x": 500, "y": 300}
 - mouse_click: {"action": "mouse_click", "x": 500, "y": 300, "button": "left"}
 - mouse_scroll: {"action": "mouse_scroll", "amount": 3} — positive scrolls up
@@ -772,6 +1064,15 @@ Actions and their fields:
 - read_file: {"action": "read_file", "path": "…"} — text files up to 200 KB
 - write_file: {"action": "write_file", "path": "…", "text": "…"}
 - system_info: {"action": "system_info"} — CPU, memory, disk, battery
+- window_minimise: {"action": "window_minimise"} — minimise the focused window
+- window_maximise: {"action": "window_maximise"} — maximise the focused window
+- window_restore: {"action": "window_restore"} — restore the focused window
+- window_close: {"action": "window_close"} — close the focused window
+- volume_up: {"action": "volume_up"} — volume_up / volume_down / volume_mute
+- media_key: {"action": "media_key", "key": "play_pause"} — play_pause, next, previous, stop
+- screenshot: {"action": "screenshot"} — saves to Pictures/Aries, reports the path (or pass "path")
+- lock_pc: {"action": "lock_pc"} — lock the PC (Win+L)
+- open_settings: {"action": "open_settings", "page": "bluetooth"} — a Settings page (wifi, display, sound, apps, update, privacy, accounts, power, storage, notifications); empty page opens Settings itself
 
 Rules: at most 5 steps in one plan. Do NOT plan shutdown, restart,
 or deleting files unless the user explicitly asked for that — those

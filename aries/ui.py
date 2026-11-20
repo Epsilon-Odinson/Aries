@@ -53,6 +53,7 @@ import webbrowser
 from PyQt5.QtCore import (
     QEvent,
     QObject,
+    QRect,
     QSettings,
     Qt,
     QThread,
@@ -179,6 +180,13 @@ class VeilWidget(QWidget):
         self._artwork_img: QImage | None = None
         self._grain_pix: QPixmap | None = None
         self._artwork_pix: QPixmap | None = None
+        # The static base layer (deep-purple bg + grain + vignette),
+        # painted once per resize/grain change and blitted every frame.
+        # Without this, every frame redrew the full-screen grain and
+        # vignette from scratch — that is what made the pointer orb
+        # feel slow. Now a frame is: blit the cached base + draw the
+        # reveal disc only.
+        self._base_pix: QPixmap | None = None
         self._images_ok = False
         self._load_images()
         # Pointer / drift state (web Veil.jsx, same numbers).
@@ -189,7 +197,10 @@ class VeilWidget(QWidget):
         self._elapsed = 0.0  # seconds since start
         self._reveal_buf: QImage | None = None
         self._timer = QTimer(self)
-        self._timer.setInterval(50)  # ~20 fps: smooth drift, cheap paint
+        # 60 fps like the web's requestAnimationFrame (was 20 fps):
+        # the reveal lerps 12% toward the pointer per frame, so at
+        # 20 fps it lagged badly behind the cursor and felt slow.
+        self._timer.setInterval(16)
         self._timer.timeout.connect(self._tick)
         self._timer.start()
 
@@ -229,13 +240,42 @@ class VeilWidget(QWidget):
         self.update()
 
     def _rebuild_layers(self) -> None:
-        """Rebuild the cover-fit pixmaps for the current widget size."""
+        """Rebuild the cover-fit pixmaps for the current widget size,
+        plus the cached static base (bg + grain + vignette)."""
+        from PyQt5.QtGui import QRadialGradient
+
         w, h = max(self.width(), 1), max(self.height(), 1)
         if self._grain_img is not None:
             self._grain_pix = _cover_pixmap(self._grain_img, w, h)
         if self._artwork_img is not None:
             self._artwork_pix = _cover_pixmap(self._artwork_img, w, h)
         self._reveal_buf = QImage(w, h, QImage.Format_ARGB32_Premultiplied)
+        # Static base: deep purple underneath, the grain on top, then
+        # the vignette (darker toward the edges, like the web front).
+        # Painted once here, blitted every frame — a frame never
+        # redraws the grain or the vignette.
+        base = QPixmap(w, h)
+        bp = QPainter(base)
+        bp.fillRect(base.rect(), QColor(BG))
+        if self._grain_pix is not None:
+            bp.drawPixmap(0, 0, self._grain_pix)
+        else:
+            glow = QRadialGradient(w * 0.5, h * 0.26, max(w, h) * 0.42)
+            glow.setColorAt(0.0, _alpha(ACCENT, 26))
+            glow.setColorAt(0.55, _alpha(ACCENT, 10))
+            glow.setColorAt(1.0, _alpha(ACCENT, 0))
+            bp.setPen(Qt.NoPen)
+            bp.setBrush(glow)
+            bp.drawRect(base.rect())
+        vignette = QRadialGradient(w * 0.5, h * 0.26, max(w, h) * 0.75)
+        vignette.setColorAt(0.0, _alpha(BG_DEEP, 0))
+        vignette.setColorAt(0.62, _alpha(BG_DEEP, 40))
+        vignette.setColorAt(1.0, _alpha(BG_DEEP, 140))
+        bp.setPen(Qt.NoPen)
+        bp.setBrush(vignette)
+        bp.drawRect(base.rect())
+        bp.end()
+        self._base_pix = base
 
     def resizeEvent(self, event) -> None:  # noqa: N802 - Qt naming
         super().resizeEvent(event)
@@ -269,8 +309,8 @@ class VeilWidget(QWidget):
         self.burst_at(self.width() * 0.5, self.height() * 0.44)
 
     def _tick(self) -> None:
-        """Advance the drift clock and repaint. ~20 fps."""
-        self._elapsed += 0.05
+        """Advance the drift clock and repaint. 60 fps."""
+        self._elapsed += 0.016
         self.update()
 
     def _draw_masked_reveal(self, painter: QPainter, cx: float, cy: float,
@@ -279,8 +319,12 @@ class VeilWidget(QWidget):
 
         The mask is fully opaque within 55% of the radius and fades
         to transparent at the radius (web Veil.jsx), with a soft
-        purple rim at 97% of the radius. Uses an offscreen buffer
-        with CompositionMode_DestinationIn."""
+        purple rim at 97% of the radius. Only the disc's bounding
+        rectangle is touched — the old code redrew and blitted the
+        whole screen for every reveal, which is what made the orb
+        slow. Uses an offscreen buffer with
+        CompositionMode_DestinationIn.
+        """
         if radius <= 0 or alpha <= 0 or self._artwork_pix is None:
             return
         from PyQt5.QtGui import QRadialGradient
@@ -290,9 +334,20 @@ class VeilWidget(QWidget):
         if buf is None or buf.size() != self.size():
             buf = QImage(w, h, QImage.Format_ARGB32_Premultiplied)
             self._reveal_buf = buf
-        buf.fill(Qt.transparent)
+        # The disc, clamped to the widget (with a 2 px margin for the rim).
+        left = max(0, int(cx - radius) - 2)
+        top = max(0, int(cy - radius) - 2)
+        right = min(w, int(cx + radius) + 3)
+        bottom = min(h, int(cy + radius) + 3)
+        if right <= left or bottom <= top:
+            return
+        disc = QRect(left, top, right - left, bottom - top)
         bp = QPainter(buf)
         bp.setRenderHint(QPainter.Antialiasing)
+        bp.setClipRect(disc)
+        # Clear only the disc, then draw only the artwork under it.
+        bp.setCompositionMode(QPainter.CompositionMode_Source)
+        bp.fillRect(disc, Qt.transparent)
         bp.drawPixmap(0, 0, self._artwork_pix)
         # Radial mask: opaque to 55% of the radius, fading to 0 at r.
         grad = QRadialGradient(cx, cy, radius)
@@ -302,11 +357,12 @@ class VeilWidget(QWidget):
         bp.setCompositionMode(QPainter.CompositionMode_DestinationIn)
         bp.setPen(Qt.NoPen)
         bp.setBrush(grad)
-        bp.drawRect(0, 0, w, h)
+        bp.drawRect(disc)
         bp.end()
+        # Blit only the disc region of the buffer to the screen.
         painter.save()
         painter.setOpacity(alpha)
-        painter.drawImage(0, 0, buf)
+        painter.drawImage(disc, buf, disc)
         painter.restore()
         # Soft lit rim where the veil lifts.
         painter.save()
@@ -318,23 +374,14 @@ class VeilWidget(QWidget):
         painter.restore()
 
     def paintEvent(self, event) -> None:  # noqa: N802 - Qt naming
-        from PyQt5.QtGui import QRadialGradient
-
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
         w, h = max(self.width(), 1), max(self.height(), 1)
-        painter.fillRect(self.rect(), QColor(BG))
-        if self._images_ok and self._grain_pix is not None:
-            painter.drawPixmap(0, 0, self._grain_pix)
+        # Static base (bg + grain + vignette), cached per resize.
+        if self._base_pix is not None:
+            painter.drawPixmap(0, 0, self._base_pix)
         else:
-            # Fallback (images failed): flat deep purple + a soft glow.
-            glow = QRadialGradient(w * 0.5, h * 0.26, max(w, h) * 0.42)
-            glow.setColorAt(0.0, _alpha(ACCENT, 26))
-            glow.setColorAt(0.55, _alpha(ACCENT, 10))
-            glow.setColorAt(1.0, _alpha(ACCENT, 0))
-            painter.setPen(Qt.NoPen)
-            painter.setBrush(glow)
-            painter.drawRect(self.rect())
+            painter.fillRect(self.rect(), QColor(BG))
 
         # Idle drift (web lissajous) when the pointer has not been seen,
         # then ease the reveal toward its target.
@@ -363,15 +410,6 @@ class VeilWidget(QWidget):
                     self._draw_masked_reveal(
                         painter, b["x"], b["y"], br, (1 - prog) * 0.95)
             self._bursts = alive
-
-        # Vignette: darker toward the edges, like the web front's.
-        vignette = QRadialGradient(w * 0.5, h * 0.26, max(w, h) * 0.75)
-        vignette.setColorAt(0.0, _alpha(BG_DEEP, 0))
-        vignette.setColorAt(0.62, _alpha(BG_DEEP, 40))
-        vignette.setColorAt(1.0, _alpha(BG_DEEP, 140))
-        painter.setPen(Qt.NoPen)
-        painter.setBrush(vignette)
-        painter.drawRect(self.rect())
 
 
 # Backwards-compatible alias.
@@ -747,29 +785,47 @@ class AriesMessageWidget(QWidget):
     then — only when the reply carries sources — a "Sources (n)"
     button under it. Tapping the button expands/collapses the source
     links. The button matches the web-front styling: deep purple,
-    cream text, subtle border, pill shape."""
+    cream text, subtle border, pill shape.
+
+    Like the web, the reply is bare cream text straight on the veil
+    (no "Aries:" prefix, no bubble), centred, max 640 px wide,
+    1.05rem with a dark halo so it stays readable over the artwork.
+    """
 
     def __init__(self, text: str, sources: list[dict] | None = None,
                  parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._sources = list(sources or [])
+        self.setMaximumWidth(640)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 4, 0, 4)
         layout.setSpacing(6)
         body = QLabel(self)
         body.setWordWrap(True)
+        body.setAlignment(Qt.AlignCenter)
         body.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        body.setText(
-            f'<span style="color:{ACCENT_SOFT}"><b>Aries:</b></span> '
-            f'<span style="color:{TEXT}">{text}</span>')
+        # Plain text, never rich text — the model's words are shown
+        # exactly, and a "<" in a reply can never become markup.
+        body.setTextFormat(Qt.PlainText)
+        body.setText(text)
         body.setStyleSheet(
-            f"font-family: {SANS}; font-size: 15px; line-height: 1.6;")
+            f"font-family: {SANS}; font-size: 17px; line-height: 1.6; "
+            f"color: {TEXT};")
+        # Dark halo so the text stays readable over the artwork,
+        # like the web's text-shadow.
+        from PyQt5.QtWidgets import QGraphicsDropShadowEffect
+
+        halo = QGraphicsDropShadowEffect(body)
+        halo.setBlurRadius(14)
+        halo.setColor(QColor(BG_DEEP))
+        halo.setOffset(0, 0)
+        body.setGraphicsEffect(halo)
         layout.addWidget(body)
         self._panel = None
         self._btn = None
         if self._sources:
             self._btn = QPushButton(
-                f"Sources ({len(self._sources)})", self)
+                f"Sources ({len(self._sources)}) ▾", self)
             self._btn.setCheckable(True)
             self._btn.setChecked(False)
             self._btn.setStyleSheet(
@@ -788,12 +844,17 @@ class AriesMessageWidget(QWidget):
             self._panel.setVisible(checked)
             self._btn.setText(
                 f"Sources ({len(self._sources)})"
-                + ("  ▲" if checked else "  ▼"))
+                + (" ▴" if checked else " ▾"))
 
 
 class ChatLog(QWidget):
-    """The chat as a scrollable list of message widgets (not one big
-    text box), so each reply can carry its own Sources button."""
+    """The chat area — like the web, it shows ONLY the latest Aries
+    reply (bare cream text on the veil), never a scrolling history
+    of "You:" / "Aries:" lines. The full history lives in Settings
+    → Memory → Full history, exactly like the web. Transient notes
+    (errors, "didn't catch that", task kept) go to the notice bar
+    above the composer, not into this area.
+    """
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -802,6 +863,14 @@ class ChatLog(QWidget):
         self._layout.setSpacing(2)
         self._layout.addStretch(1)
         self._scroll = None  # set by the owner (the QScrollArea)
+        self._latest = None  # the current AriesMessageWidget, if any
+        self._hint = QLabel(
+            "Ask Aries anything — or tap the mic and talk.", self)
+        self._hint.setWordWrap(True)
+        self._hint.setAlignment(Qt.AlignCenter)
+        self._hint.setStyleSheet(
+            f"font-family: {SANS}; font-size: 15px; color: {CREAM_DIM};")
+        self._layout.insertWidget(self._layout.count() - 1, self._hint)
 
     def set_scroll(self, scroll: QScrollArea) -> None:
         self._scroll = scroll
@@ -812,36 +881,38 @@ class ChatLog(QWidget):
             bar.setValue(bar.maximum())
 
     def add_user(self, text: str) -> None:
-        label = QLabel(self)
-        label.setWordWrap(True)
-        label.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        label.setText(
-            f'<span style="color:{TEXT}"><b>You:</b></span> '
-            f'<span style="color:{TEXT}">{text}</span>')
-        label.setStyleSheet(
-            f"font-family: {SANS}; font-size: 15px; line-height: 1.6;")
-        self._layout.insertWidget(self._layout.count() - 1, label)
-        self._scroll_to_bottom()
+        """User messages are NOT shown on the main view (web parity):
+        only the latest Aries reply is. Kept so existing callers do
+        not break; the message still lands in the local history and
+        in Settings → Memory → Full history."""
+        return
 
     def add_aries(self, text: str, sources: list[dict] | None = None) -> None:
+        """Show this reply, replacing the previous one (latest only)."""
+        if self._latest is not None:
+            self._layout.removeWidget(self._latest)
+            self._latest.deleteLater()
+            self._latest = None
+        self._hint.hide()
         widget = AriesMessageWidget(text, sources, self)
-        self._layout.insertWidget(self._layout.count() - 1, widget)
+        self._layout.insertWidget(self._layout.count() - 1, widget,
+                                  alignment=Qt.AlignCenter)
+        self._latest = widget
         self._scroll_to_bottom()
 
     def add_note(self, text: str) -> None:
-        label = QLabel(self)
-        label.setWordWrap(True)
-        label.setText(
-            f'<span style="color:{MUTED}; font-size: 13px;">{text}</span>')
-        label.setStyleSheet(f"font-family: {SANS};")
-        self._layout.insertWidget(self._layout.count() - 1, label)
-        self._scroll_to_bottom()
+        """Transient notes do not belong in the reply area (web
+        parity — they are a notice above the composer). Kept so
+        existing callers do not break; the window routes notes to
+        its notice bar instead."""
+        return
 
     def clear(self) -> None:
-        while self._layout.count() > 1:
-            item = self._layout.takeAt(0)
-            if item.widget() is not None:
-                item.widget().deleteLater()
+        if self._latest is not None:
+            self._layout.removeWidget(self._latest)
+            self._latest.deleteLater()
+            self._latest = None
+        self._hint.show()
 
 
 # --- Background workers (never touch widgets) --------------------------------
@@ -865,6 +936,8 @@ class BackendChatWorker(QObject):
                 self._message, self._use_search, self._consent)
         except BackendError as exc:
             self.failed.emit(str(exc))
+        except Exception as exc:  # noqa: BLE001 - never kill the app
+            self.failed.emit(str(exc))
         else:
             self.finished.emit(result)
 
@@ -882,7 +955,7 @@ class DirectChatWorker(QObject):
     def run(self) -> None:
         try:
             reply = direct_chat(self._history)
-        except (AriesLLMError, RuntimeError) as exc:
+        except Exception as exc:  # noqa: BLE001 - never kill the app
             self.failed.emit(str(exc))
         else:
             self.finished.emit(reply)
@@ -903,6 +976,8 @@ class StateWorker(QObject):
             result = self._client.state()
         except BackendError as exc:
             self.failed.emit(str(exc))
+        except Exception as exc:  # noqa: BLE001 - never kill the app
+            self.failed.emit(str(exc))
         else:
             self.finished.emit(result)
 
@@ -918,10 +993,17 @@ class ListenWorker(QObject):
         self._engine = engine
 
     def run(self) -> None:
+        # Catch EVERYTHING: an unexpected exception here used to escape
+        # the worker and could take the app down with it. A failure
+        # must surface as a plain-words "failed" signal, never a crash.
         try:
             text = self._engine.listen_once()
         except VoiceError as exc:
             self.failed.emit(str(exc))
+        except Exception as exc:  # noqa: BLE001 - never kill the app
+            self.failed.emit(
+                f"Listening failed unexpectedly: {exc}. Try again, or "
+                "type your message.")
         else:
             self.finished.emit(text or "")
 
@@ -1038,11 +1120,12 @@ class MiniWindow(QWidget):
     geometry (which already excludes the taskbar) and 24 px from the
     right edge. It stays always-on-top and is draggable by the face.
 
-    Voice-activated ONLY: a single click on the face starts voice
-    listening (the main window dictates, chats, and speaks the reply
-    back — replies in mini mode are always spoken). A double-click
-    expands back to full mode. The wake phrase ("Hey Aries") also
-    works here when it is on. There is no text input in mini mode.
+    Pressing the face EXPANDS back to full mode — a single click or a
+    double-click, either way you are back to full scale. Voice in
+    mini mode is the wake phrase ("Hey Aries", hands-free) only:
+    clicking the face never starts listening, so a press can never
+    close the app. Replies in mini mode are always spoken. There is
+    no text input in mini mode.
     """
 
     # Clear gap above the taskbar — the face floats, it never touches.
@@ -1050,7 +1133,7 @@ class MiniWindow(QWidget):
     GAP_FROM_RIGHT = 24
 
     closed = pyqtSignal()
-    face_clicked = pyqtSignal()   # single click -> start voice listening
+    face_clicked = pyqtSignal()   # single click -> expand to full mode
     face_double_clicked = pyqtSignal()  # double click -> back to full mode
 
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -1143,12 +1226,12 @@ class MiniWindow(QWidget):
             import time
             moved = (event.pos() - self._press_pos).manhattanLength()
             held = time.monotonic() - self._press_time
-            # A plain click (not a drag): single click = listen,
-            # double click = expand. Qt delivers a double-click as
-            # two press/release pairs plus a DoubleClick event, so
-            # the single-click action is fired on release only when
-            # it was not part of a double-click (handled in
-            # mouseDoubleClickEvent).
+            # A plain click (not a drag): single click = expand back to
+            # full mode, double click = expand too. Qt delivers a
+            # double-click as two press/release pairs plus a
+            # DoubleClick event, so the single-click action is fired
+            # on release only when it was not part of a double-click
+            # (handled in mouseDoubleClickEvent).
             if moved < 8 and held < 0.6:
                 self.face_clicked.emit()
         self._press_pos = None
@@ -1266,26 +1349,36 @@ class SettingsDialog(QDialog):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 14, 16, 14)
         layout.setSpacing(10)
+        # Header, like the web sheet: "Settings / More" + Close.
+        head = QHBoxLayout()
+        head_title = QLabel("SETTINGS / MORE", self)
+        head_title.setStyleSheet(
+            f"font-family: {SANS_SEMI}; font-size: 17px; font-weight: bold;"
+            "letter-spacing: 2px;")
+        head.addWidget(head_title)
+        head.addStretch(1)
+        close_btn = QPushButton("Close ✕", self)
+        close_btn.setStyleSheet(
+            f"background: {PANEL_SEMI}; color: {TEXT}; padding: 8px 16px;"
+            f"border: 1px solid {HAIRLINE}; border-radius: 16px;"
+            f"font-family: {SANS_SEMI}; font-size: 13px;")
+        close_btn.clicked.connect(self.accept)
+        head.addWidget(close_btn)
+        layout.addLayout(head)
         self._tabs = QTabWidget(self)
+        # Pill tabs, like the web's .more-tabs buttons.
         self._tabs.setStyleSheet(
             f"QTabBar::tab {{ background: {PANEL_SEMI}; color: {TEXT}; "
             f"padding: 8px 18px; border: 1px solid {HAIRLINE}; "
-            f"border-top-left-radius: 8px; border-top-right-radius: 8px; }}"
-            f"QTabBar::tab:selected {{ background: {ACCENT}; color: white; }}"
-            f"QTabWidget::pane {{ border: 1px solid {HAIRLINE}; }}")
+            f"border-radius: 16px; margin-right: 6px; }}"
+            f"QTabBar::tab:selected {{ background: {ACCENT}; color: white; "
+            f"border-color: {ACCENT}; }}"
+            f"QTabWidget::pane {{ border: none; }}")
         layout.addWidget(self._tabs, stretch=1)
         self._msg = QLabel(self)
         self._msg.setWordWrap(True)
         self._msg.setStyleSheet(f"color: {ACCENT_SOFT}; font-size: 12px;")
         layout.addWidget(self._msg)
-        done_btn = QPushButton("Done", self)
-        done_btn.setMinimumHeight(44)
-        done_btn.setStyleSheet(
-            f"background: {ACCENT}; color: white; padding: 8px 24px;"
-            f"border: none; border-radius: 22px; font-weight: bold;"
-            f"font-family: {SANS_SEMI}; font-size: 14px;")
-        done_btn.clicked.connect(self.accept)
-        layout.addWidget(done_btn, alignment=Qt.AlignRight)
         self._build_aries_tab()
         self._build_memory_tab()
         self._build_more_tab()
@@ -1372,17 +1465,42 @@ class SettingsDialog(QDialog):
         return scroll
 
     def _section(self, parent_layout, title: str) -> None:
-        label = QLabel(title, self)
+        """A section heading, web-style: small, tracked, uppercase,
+        purple-soft, with a hairline rule underneath."""
+        label = QLabel(title.upper(), self)
         label.setStyleSheet(
-            f"font-family: {SANS_SEMI}; font-size: 15px; font-weight: bold;"
-            f"color: {TEXT}; margin-top: 10px;")
+            f"font-family: {SANS_SEMI}; font-size: 12px; font-weight: bold;"
+            f"letter-spacing: 2px; color: {ACCENT_SOFT}; margin-top: 12px;")
         parent_layout.addWidget(label)
+        rule = QFrame(self)
+        rule.setFrameShape(QFrame.HLine)
+        rule.setFrameShadow(QFrame.Plain)
+        rule.setStyleSheet(f"color: {HAIRLINE}; background: {HAIRLINE};")
+        rule.setFixedHeight(1)
+        parent_layout.addWidget(rule)
 
     def _note(self, parent_layout, text: str) -> None:
         label = QLabel(text, self)
         label.setWordWrap(True)
         label.setStyleSheet(f"color: {MUTED}; font-size: 12px;")
         parent_layout.addWidget(label)
+
+    def _pill_toggle(self, text: str, checked: bool) -> QPushButton:
+        """A web-style pill toggle (ON = solid purple, OFF = panel
+        pill). Returns a checkable QPushButton with a `toggled`
+        signal and `isChecked()`, just like a QCheckBox."""
+        btn = QPushButton(text, self)
+        btn.setCheckable(True)
+        btn.setChecked(checked)
+        btn.setCursor(Qt.PointingHandCursor)
+        btn.setStyleSheet(
+            f"QPushButton {{ background: {PANEL_SEMI}; color: {TEXT}; "
+            f"border: 1px solid {HAIRLINE}; border-radius: 16px; "
+            f"padding: 8px 18px; font-family: {SANS_SEMI}; font-size: 13px;"
+            f"font-weight: 600; }}"
+            f"QPushButton:checked {{ background: {ACCENT}; color: white; "
+            f"border-color: {ACCENT}; }}")
+        return btn
 
     def _styled_button(self, text: str) -> QPushButton:
         btn = QPushButton(text, self)
@@ -1419,9 +1537,15 @@ class SettingsDialog(QDialog):
         self._directness.setRange(0, 100)
         self._humour = QSlider(Qt.Horizontal, self)
         self._humour.setRange(0, 100)
-        form.addRow("Warmth", self._warmth)
-        form.addRow("Directness", self._directness)
-        form.addRow("Humour", self._humour)
+        # The web shows the value inline in the label ("warmth — 70").
+        for name, slider in (("warmth", self._warmth),
+                             ("directness", self._directness),
+                             ("humour", self._humour)):
+            label = QLabel(self)
+            label.setText(f"{name} — {slider.value()}")
+            slider.valueChanged.connect(
+                lambda v, lbl=label, n=name: lbl.setText(f"{n} — {v}"))
+            form.addRow(label, slider)
         self._person_notes = QTextEdit(self)
         self._person_notes.setPlaceholderText("How should Aries act?")
         self._person_notes.setMaximumHeight(70)
@@ -1484,23 +1608,28 @@ class SettingsDialog(QDialog):
         dev_row.addWidget(self._dev_use)
         dev_row.addWidget(self._dev_default)
         layout.addLayout(dev_row)
-        # Talk & search toggles
+        # Talk & search toggles (web: pill toggle buttons, not
+        # checkboxes — ON is a solid purple pill, OFF is a panel pill).
         self._section(layout, "Talk & search")
-        self._talk_back = QCheckBox("Talk back (read replies aloud)", self)
-        self._talk_back.setChecked(bool(
-            self._settings.value("talk_back", True, type=bool)))
+        toggle_row = QHBoxLayout()
+        toggle_row.setSpacing(8)
+        self._talk_back = self._pill_toggle(
+            "Talk back", bool(
+                self._settings.value("talk_back", True, type=bool)))
         self._talk_back.toggled.connect(self._on_local_toggle)
-        layout.addWidget(self._talk_back)
-        self._wake_on = QCheckBox("Wake phrase (“Hey Aries”)", self)
-        self._wake_on.setChecked(bool(
-            self._settings.value("wake_on", False, type=bool)))
+        toggle_row.addWidget(self._talk_back)
+        self._wake_on = self._pill_toggle(
+            'Wake phrase ("Hey Aries")', bool(
+                self._settings.value("wake_on", False, type=bool)))
         self._wake_on.toggled.connect(self._on_local_toggle)
-        layout.addWidget(self._wake_on)
-        self._web_search = QCheckBox("Search the web", self)
-        self._web_search.setChecked(bool(
-            self._settings.value("web_search", False, type=bool)))
+        toggle_row.addWidget(self._wake_on)
+        self._web_search = self._pill_toggle(
+            "Search the web", bool(
+                self._settings.value("web_search", False, type=bool)))
         self._web_search.toggled.connect(self._on_local_toggle)
-        layout.addWidget(self._web_search)
+        toggle_row.addWidget(self._web_search)
+        toggle_row.addStretch(1)
+        layout.addLayout(toggle_row)
         self._note(layout, "Talk back reads Aries' replies aloud. Wake "
                    "phrase listens for “Hey Aries”. Search the web grounds "
                    "the next answer in live results.")
@@ -1757,7 +1886,7 @@ class SettingsDialog(QDialog):
                    "day-to-day things Aries learns live in the vault above.")
         self._mem_file = QTextEdit(self)
         self._mem_file.setReadOnly(True)
-        self._mem_file.setMaximumHeight(140)
+        self._mem_file.setMaximumHeight(320)
         layout.addWidget(self._mem_file)
         self._section(layout, "Full history")
         clear_btn = self._ghost_button("Clear chat history")
@@ -2005,7 +2134,7 @@ class SettingsDialog(QDialog):
             lambda: webbrowser.open(
                 "https://github.com/Epsilon-Odinson/Aries/releases"))
         layout.addWidget(download, alignment=Qt.AlignLeft)
-        self._note(layout, "Version 0.5.0 — the installer sets up Aries, "
+        self._note(layout, "Version 0.6.0 — the installer sets up Aries, "
                    "offers a desktop shortcut and a taskbar pin. The "
                    "portable single file (Aries.exe) is on the same "
                    "release page.")
@@ -2301,7 +2430,9 @@ class SettingsDialog(QDialog):
                                      if row.get("account") else "")
                       if row.get("connected") else "Not connected")
             status_label = QLabel(status, self)
-            status_label.setStyleSheet(f"color: {MUTED}; font-size: 12px;")
+            status_label.setStyleSheet(
+                f"color: {ACCENT_SOFT}; font-size: 12px; "
+                "font-weight: 600;")
             box_layout.addWidget(status_label)
             box_layout.addWidget(QLabel(descs.get(key, ""), self))
             if row.get("note"):
@@ -2752,7 +2883,8 @@ class AriesWindow(QMainWindow):
         root = QVBoxLayout(overlay)
         root.setContentsMargins(28, 16, 28, 28)
         root.setSpacing(12)
-        # Tiny gear + fullscreen buttons, top-right.
+        # Tiny gear, top-right — the one entry point to Settings.
+        # (The web has only the gear here; fullscreen is F11 / Esc.)
         top = QHBoxLayout()
         top.addStretch(1)
         self._settings_btn = QPushButton("⚙", self)
@@ -2765,50 +2897,46 @@ class AriesWindow(QMainWindow):
             f"font-family: {SANS}; font-size: 17px;"
             f"border: 1px solid {HAIRLINE}; border-radius: 19px;")
         top.addWidget(self._settings_btn)
-        self._fs_btn = QPushButton("⛶", self)
-        self._fs_btn.setObjectName("fullscreen_btn")
-        self._fs_btn.setToolTip("Fullscreen (F11)")
-        self._fs_btn.clicked.connect(self._toggle_fullscreen)
-        self._fs_btn.setFixedSize(38, 38)
-        self._fs_btn.setStyleSheet(
-            f"background: {PANEL_SEMI}; color: {TEXT}; "
-            f"font-family: {SANS}; font-size: 15px;"
-            f"border: 1px solid {HAIRLINE}; border-radius: 19px;")
-        top.addWidget(self._fs_btn)
         root.addLayout(top)
         # ---- The face: the web front's visor, first thing you see -----
-        self._core = AriesFaceWidget(280, self)
+        # Web: clamp(150px, 34vw, 218px) — on a laptop that is 218 px.
+        self._core = AriesFaceWidget(218, self)
         self._core.setToolTip("Click the face for mini mode")
         self._core.clicked.connect(self._open_mini)
         root.addWidget(self._core, alignment=Qt.AlignCenter)
         # ---- Greeting lockup, exactly like the web front --------------
+        # Web h1: clamp(2.6rem, 9vw, 4.6rem) = 74 px on a laptop,
+        # weight 800, letter-spacing 0.16em; "active" is Georgia
+        # italic at 0.54em (40 px); "Ready to cook." Georgia italic
+        # at 0.36em (26 px), opacity 0.72.
         greet_wrap = QVBoxLayout()
         greet_wrap.setSpacing(2)
         greet_wrap.setContentsMargins(0, 0, 0, 0)
         word_aries = QLabel("ARIES", self)
         word_aries.setAlignment(Qt.AlignCenter)
         word_aries.setStyleSheet(
-            f"color: {CREAM}; font-family: {SANS_SEMI}; font-size: 56px;"
-            "font-weight: bold; letter-spacing: 9px;")
+            f"color: {CREAM}; font-family: {SANS_SEMI}; font-size: 74px;"
+            "font-weight: bold; letter-spacing: 12px;")
         greet_wrap.addWidget(word_aries)
         word_active = QLabel("active", self)
         word_active.setAlignment(Qt.AlignCenter)
         word_active.setStyleSheet(
-            f"color: {CREAM}; font-family: {SERIF}; font-size: 30px;"
+            f"color: {CREAM}; font-family: {SERIF}; font-size: 40px;"
             "font-style: italic;")
         greet_wrap.addWidget(word_active)
         word_cook = QLabel("Ready to cook.", self)
         word_cook.setAlignment(Qt.AlignCenter)
         word_cook.setStyleSheet(
-            f"color: {CREAM_DIM}; font-family: {SERIF}; font-size: 20px;"
+            f"color: {CREAM_DIM}; font-family: {SERIF}; font-size: 26px;"
             "font-style: italic;")
         greet_wrap.addWidget(word_cook)
         root.addLayout(greet_wrap)
         # ---- One tiny status line ---------------------------------------
+        # Web: 0.64rem (10 px), 600, letter-spacing 0.3em, uppercase.
         self._status = QLabel("READY", self)
         self._status.setAlignment(Qt.AlignCenter)
         self._status.setStyleSheet(
-            f"color: {MUTED}; font-size: 11px; font-family: {SANS};"
+            f"color: {MUTED}; font-size: 10px; font-family: {SANS};"
             "letter-spacing: 3px;")
         root.addWidget(self._status)
         # ---- Due-task reminder card (hidden until a task is due) -------
@@ -2831,15 +2959,33 @@ class AriesWindow(QMainWindow):
         root.addWidget(self._due_card)
         self._due_task: dict | None = None
         # ---- Chat: cream text straight on the veil, with a Sources
-        # button under replies that carry sources.
+        # button under replies that carry sources. Latest reply only,
+        # like the web — no scrollbar clutter.
         self._chat_scroll = QScrollArea(self)
         self._chat_scroll.setWidgetResizable(True)
+        self._chat_scroll.setVerticalScrollBarPolicy(
+            Qt.ScrollBarAlwaysOff)
+        self._chat_scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarAlwaysOff)
         self._chat_scroll.setStyleSheet(
             "background: transparent; border: none;")
         self._chat = ChatLog(self)
         self._chat.set_scroll(self._chat_scroll)
         self._chat_scroll.setWidget(self._chat)
         root.addWidget(self._chat_scroll, stretch=1)
+        # ---- Notice bar above the composer (web .notice): transient
+        # notes — "didn't catch that", "task kept", offline — show
+        # here, never in the reply area. Tap to dismiss.
+        self._notice = QPushButton(self)
+        self._notice.setVisible(False)
+        self._notice.setCursor(Qt.PointingHandCursor)
+        self._notice.clicked.connect(self._notice.hide)
+        self._notice.setStyleSheet(
+            "background: rgba(123, 47, 255, 36); color: #f6ecd9; "
+            "border: 1px solid rgba(183, 139, 255, 115); "
+            "border-radius: 12px; padding: 10px 14px; font-size: 14px; "
+            f"font-family: {SANS}; text-align: center;")
+        root.addWidget(self._notice)
         # ---- Composer: the web front's dock pill -------------------------
         bottom = QHBoxLayout()
         bottom.setSpacing(10)
@@ -2856,7 +3002,7 @@ class AriesWindow(QMainWindow):
         self._input.setMinimumHeight(40)
         self._input.setStyleSheet(
             f"background: transparent; color: {TEXT}; border: none;"
-            f"font-family: {SANS}; font-size: 14px; padding: 8px 12px;")
+            f"font-family: {SANS}; font-size: 16px; padding: 8px 12px;")
         self._input.returnPressed.connect(self._on_send)
         composer_row.addWidget(self._input, stretch=1)
         self._mic_btn = QPushButton("🎙", self)
@@ -2894,6 +3040,41 @@ class AriesWindow(QMainWindow):
         self.setMouseTracking(True)
         central.setMouseTracking(True)
         overlay.setMouseTracking(True)
+        # Topline "ARIES" label (web .topline) and the "© Made by
+        # Epsilon" stamp: absolutely positioned over the veil, like
+        # the web's fixed elements — not part of the column layout.
+        self._topline = QLabel("ARIES", central)
+        self._topline.setAlignment(Qt.AlignCenter)
+        self._topline.setStyleSheet(
+            f"background: transparent; color: {CREAM_DIM}; "
+            f"font-family: {SANS}; font-size: 11px; font-weight: 600; "
+            "letter-spacing: 4px;")
+        self._topline.setAttribute(Qt.WA_TransparentForMouseEvents)
+        self._stamp = QLabel("© Made by Epsilon", central)
+        self._stamp.setStyleSheet(
+            f"background: transparent; color: {CREAM_DIM}; "
+            "font-family: 'Segoe Script', 'Brush Script MT', "
+            "'Lucida Handwriting', cursive; font-size: 11pt; "
+            "font-style: italic;")
+        self._stamp.setAttribute(Qt.WA_TransparentForMouseEvents)
+        self._position_overlays()
+
+    def _position_overlays(self) -> None:
+        """Position the topline and the stamp (absolute, web-style)."""
+        if not hasattr(self, "_topline"):
+            return
+        rect = self.centralWidget().rect()
+        # Topline: centred at the very top.
+        self._topline.setGeometry(0, 18, rect.width(), 20)
+        # Stamp: bottom-left corner, clear of the composer.
+        self._stamp.adjustSize()
+        self._stamp.move(16, rect.height() - self._stamp.height() - 14)
+
+    def _show_notice(self, text: str) -> None:
+        """Show a transient notice above the composer (web .notice).
+        Tap it to dismiss. Replaces chat-area notes."""
+        self._notice.setText(text + "  ✕")
+        self._notice.setVisible(True)
 
     def resizeEvent(self, event) -> None:  # noqa: N802 - Qt naming
         super().resizeEvent(event)
@@ -2901,6 +3082,7 @@ class AriesWindow(QMainWindow):
             rect = self.centralWidget().rect()
             self._bg.setGeometry(rect)
             self._overlay.setGeometry(rect)
+        self._position_overlays()
 
     def mouseMoveEvent(self, event) -> None:  # noqa: N802 - Qt naming
         # The veil's reveal follows the pointer, like the web.
@@ -2933,10 +3115,9 @@ class AriesWindow(QMainWindow):
         self._update_fs_btn()
 
     def _update_fs_btn(self) -> None:
-        if hasattr(self, "_fs_btn"):
-            self._fs_btn.setToolTip(
-                "Exit fullscreen (Esc)" if self.isFullScreen()
-                else "Fullscreen (F11)")
+        # No fullscreen button on the main view any more (web parity —
+        # the web has only the gear). Fullscreen is F11 / Esc.
+        return
 
     def keyPressEvent(self, event) -> None:  # noqa: N802 - Qt naming
         if event.key() == Qt.Key_F11:
@@ -2965,16 +3146,18 @@ class AriesWindow(QMainWindow):
         # re-check the key now that we know the backend is reachable
         # (the startup key check ran before this load finished).
         self._check_key()
-        # Restore the server's chat history into the log (with Sources
-        # buttons where a message carries sources).
+        # Restore only the LATEST Aries reply into the view (web
+        # parity — the main view shows one reply, never the history;
+        # the full history lives in Settings → Memory).
         self._chat.clear()
+        latest = None
         for msg in (self._state.get("messages") or []):
-            if msg.get("role") == "user":
-                self._chat.add_user(msg.get("content", ""))
-            else:
-                self._chat.add_aries(
-                    msg.get("content", ""),
-                    msg.get("sources") or None)
+            if msg.get("role") == "assistant":
+                latest = msg
+        if latest is not None:
+            self._chat.add_aries(
+                latest.get("content", ""),
+                latest.get("sources") or None)
         # Face lock: enrolled + always -> lock screen.
         face = self._state.get("face") or {}
         perms = self._state.get("permissions") or {}
@@ -2990,7 +3173,7 @@ class AriesWindow(QMainWindow):
     def _on_state_failed(self, message: str) -> None:
         self._backend_ok = False
         self._set_status("Offline — local mode")
-        self._chat.add_note(
+        self._show_notice(
             "Could not reach the Aries server — chatting with the local "
             "key instead. Live info, memory, tasks and the ElevenLabs "
             "voice need the server; check the internet connection and "
@@ -3004,8 +3187,8 @@ class AriesWindow(QMainWindow):
             self._input.setEnabled(False)
             self._send_btn.setEnabled(False)
             self._mic_btn.setEnabled(False)
-            self._chat.add_note("Aries is locked. Unlock it from Settings "
-                                "→ More → Face login.")
+            self._show_notice("Aries is locked. Unlock it from Settings "
+                              "→ More → Face login.")
             return
         self._input.setEnabled(True)
         self._send_btn.setEnabled(True)
@@ -3036,7 +3219,7 @@ class AriesWindow(QMainWindow):
             self._send_btn.setEnabled(False)
             if not getattr(self, "_key_note_shown", False):
                 self._key_note_shown = True
-                self._chat.add_note(
+                self._show_notice(
                     "No NVIDIA API key found and the server is "
                     "unreachable, so I can't chat yet. Save a key in "
                     "Settings (gear icon, top right), or check the "
@@ -3103,7 +3286,7 @@ class AriesWindow(QMainWindow):
             except VoiceError as exc:
                 self._wake_on = False
                 self._settings.setValue("wake_on", False)
-                self._chat.add_note(
+                self._show_notice(
                     f"Wake phrase could not start: {exc}")
         else:
             self._voice.stop_wake()
@@ -3153,11 +3336,18 @@ class AriesWindow(QMainWindow):
 
     # -- chat ----------------------------------------------------------------------
     def _append_user(self, text: str) -> None:
-        self._chat.add_user(text)
+        # User messages are not shown on the main view (web parity —
+        # only the latest Aries reply is). The message still lands in
+        # the local history and in Settings → Memory → Full history.
         self._local_history.append({"role": "user", "content": text})
 
     def _append_aries(self, text: str,
                       sources: list[dict] | None = None) -> None:
+        # The greeting is one-time-only on wake-up, never a reply
+        # opener — strip it here, the single funnel for every reply
+        # shown (backend, local, PC follow-ups), so a server
+        # regression can never put it back on screen.
+        text = strip_greeting_prefix(text)
         self._chat.add_aries(text, sources)
         self._local_history.append({"role": "assistant", "content": text})
 
@@ -3199,14 +3389,13 @@ class AriesWindow(QMainWindow):
         self._set_status("Ready")
 
     def _on_mic(self) -> None:
-        """Dictate: listen once, then send what was heard as a message."""
+        """Dictate: listen once, then send what was heard as a message.
+
+        The worker does the mic probe off the UI thread (listen_once
+        probes in the worker), so tapping the mic never blocks the
+        UI — and a missing/bad mic is reported by the worker's failed
+        signal in plain words, never a crash."""
         if self._listening:
-            return
-        ok, why = self._voice.mic_available()
-        if not ok:
-            self._chat.add_aries(
-                f"The mic isn't available right now — {why} Type your "
-                "message for now.")
             return
         self._listening = True
         self._set_core_state("listening")
@@ -3221,7 +3410,7 @@ class AriesWindow(QMainWindow):
         self._set_core_state("idle")
         self._set_status("Ready")
         if not text:
-            self._chat.add_note("Didn't catch that — try again, or type it.")
+            self._show_notice("Didn't catch that — try again, or type it.")
             return
         self._input.setText(text)
         self._on_send()
@@ -3295,11 +3484,11 @@ class AriesWindow(QMainWindow):
         self._append_aries(reply, sources if sources else None)
         if result.get("pending_memory") \
                 and not result["pending_memory"].get("saved"):
-            self._chat.add_note(
+            self._show_notice(
                 f"Aries learned: “{result['pending_memory'].get('text', '')}”"
                 " — approve it in Memory.")
         if result.get("task_added"):
-            self._chat.add_note(
+            self._show_notice(
                 f"Task kept: {result['task_added'].get('title', '')}")
         self._finish_reply(reply, sources)
         # Refresh server state quietly (memories/tasks may have changed).
@@ -3315,7 +3504,7 @@ class AriesWindow(QMainWindow):
     def _on_backend_failed(self, message: str) -> None:
         # The backend dropped out mid-chat: fall back to the local key
         # for this message instead of failing outright.
-        self._chat.add_note(
+        self._show_notice(
             f"The server didn't answer ({message}) — answering with the "
             "local key instead.")
         self._send_local(self._local_history[-1]["content"])
@@ -3509,7 +3698,11 @@ class AriesWindow(QMainWindow):
         self._mini = MiniWindow()
         self._mini.set_state(self._core.state())
         self._mini.closed.connect(self._close_mini)
-        self._mini.face_clicked.connect(self._mini_listen)
+        # Pressing the mini face EXPANDS back to full scale — single
+        # click or double-click, either way. It never starts
+        # listening (voice in mini mode is the "Hey Aries" wake
+        # phrase, hands-free), so a press can never close the app.
+        self._mini.face_clicked.connect(self._close_mini)
         self._mini.face_double_clicked.connect(self._close_mini)
         self._mini.dock_bottom_right()
         self._mini.show()
@@ -3528,14 +3721,13 @@ class AriesWindow(QMainWindow):
         self.activateWindow()
 
     def _mini_listen(self) -> None:
-        """Mini mode is voice-activated only: tap the face, talk, and
-        Aries answers out loud. The reply is always spoken here."""
+        """Mini mode, wake phrase only: "Hey Aries" was heard, so
+        listen for the command and answer out loud. The reply is
+        always spoken here. (Clicking the mini face never calls this
+        — a click expands back to full mode instead.) The worker
+        probes the mic off the UI thread, so a missing/bad mic just
+        flashes the error face instead of closing anything."""
         if self._listening:
-            return
-        ok, why = self._voice.mic_available()
-        if not ok:
-            self._set_core_state("error")
-            QTimer.singleShot(1800, lambda: self._set_core_state("idle"))
             return
         self._listening = True
         self._set_core_state("listening")

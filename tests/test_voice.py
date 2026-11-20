@@ -12,6 +12,7 @@ Run:  python -m pytest tests/ -x -q
   or: python -m unittest discover -s tests -v
 """
 
+import json
 import os
 import threading
 import unittest
@@ -199,35 +200,48 @@ class MicAvailableTestCase(unittest.TestCase):
 
 
 class SttWiringTestCase(unittest.TestCase):
-    """STT wiring with a mocked microphone/recogniser (no mic here)."""
+    """STT wiring with a mocked record subprocess + recogniser
+    (no mic here). 0.6.0: capture runs in a helper child process
+    (--mic-record writes a WAV); this process only transcribes it."""
+
+    def _fake_record(self, heard=True, ok=True):
+        """A subprocess.run stand-in returning the record child's JSON."""
+        import subprocess
+
+        payload = {"ok": ok, "heard": heard}
+        if not ok:
+            payload["why"] = "Could not open the microphone: boom"
+        return subprocess.CompletedProcess(
+            args=["mic-record"], returncode=0 if ok else 1,
+            stdout=json.dumps(payload) + "\n", stderr="")
 
     def test_listen_once_returns_transcribed_text(self):
         engine = VoiceEngine(client=None)
         fake_audio = object()
         with mock.patch.object(engine, "mic_available",
                                return_value=(True, "")), \
-                mock.patch("speech_recognition.Microphone") as mic_cls, \
+                mock.patch("aries.voice.subprocess.run",
+                           return_value=self._fake_record(heard=True)), \
+                mock.patch("speech_recognition.AudioFile") as audio_cls, \
                 mock.patch("speech_recognition.Recognizer") as rec_cls:
             recognizer = rec_cls.return_value
-            recognizer.listen.return_value = fake_audio
+            recognizer.record.return_value = fake_audio
             recognizer.recognize_google.return_value = "open notepad"
-            mic_cls.return_value.__enter__.return_value = object()
+            audio_cls.return_value.__enter__.return_value = object()
             text = engine.listen_once()
         self.assertEqual(text, "open notepad")
-        recognizer.adjust_for_ambient_noise.assert_called_once()
-        recognizer.listen.assert_called_once()
+        recognizer.record.assert_called_once()
+        recognizer.recognize_google.assert_called_once_with(
+            fake_audio, language="en-US")
 
-    def test_listen_once_timeout_returns_none(self):
-        import speech_recognition as sr
-
+    def test_listen_once_nothing_heard_returns_none(self):
+        # The record child heard nothing (timeout in the child) — the
+        # caller says "didn't catch that", it is not an error.
         engine = VoiceEngine(client=None)
         with mock.patch.object(engine, "mic_available",
                                return_value=(True, "")), \
-                mock.patch("speech_recognition.Microphone") as mic_cls, \
-                mock.patch("speech_recognition.Recognizer") as rec_cls:
-            recognizer = rec_cls.return_value
-            recognizer.listen.side_effect = sr.WaitTimeoutError()
-            mic_cls.return_value.__enter__.return_value = object()
+                mock.patch("aries.voice.subprocess.run",
+                           return_value=self._fake_record(heard=False)):
             text = engine.listen_once()
         self.assertIsNone(text)
 
@@ -237,14 +251,26 @@ class SttWiringTestCase(unittest.TestCase):
         engine = VoiceEngine(client=None)
         with mock.patch.object(engine, "mic_available",
                                return_value=(True, "")), \
-                mock.patch("speech_recognition.Microphone") as mic_cls, \
+                mock.patch("aries.voice.subprocess.run",
+                           return_value=self._fake_record(heard=True)), \
+                mock.patch("speech_recognition.AudioFile") as audio_cls, \
                 mock.patch("speech_recognition.Recognizer") as rec_cls:
             recognizer = rec_cls.return_value
-            recognizer.listen.return_value = object()
+            recognizer.record.return_value = object()
             recognizer.recognize_google.side_effect = sr.UnknownValueError()
-            mic_cls.return_value.__enter__.return_value = object()
+            audio_cls.return_value.__enter__.return_value = object()
             text = engine.listen_once()
         self.assertIsNone(text)
+
+    def test_record_child_failure_raises_voice_error(self):
+        engine = VoiceEngine(client=None)
+        with mock.patch.object(engine, "mic_available",
+                               return_value=(True, "")), \
+                mock.patch("aries.voice.subprocess.run",
+                           return_value=self._fake_record(ok=False)):
+            with self.assertRaises(VoiceError) as ctx:
+                engine.listen_once()
+        self.assertIn("microphone", str(ctx.exception).lower())
 
     def test_mic_unavailable_raises_voice_error(self):
         engine = VoiceEngine(client=None)

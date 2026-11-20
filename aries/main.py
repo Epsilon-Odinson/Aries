@@ -11,10 +11,70 @@ from __future__ import annotations
 
 import sys
 
-from .config import get_api_key
-from .llm import AriesLLMError, chat
-
 GREETING = "Aries active. Ready to cook."
+
+# NOTE: config/llm are imported lazily inside run_cli()/main(), NOT
+# at module top. The hidden --mic-* helper flags must run in a child
+# process with as few imports as possible (mic_worker only) — a
+# heavy import failing in the child would look like a broken mic.
+
+
+def _install_crash_guard() -> None:
+    """Never let an unhandled exception kill the app.
+
+    A PyQt slot that raises (or a background thread that raises)
+    would otherwise print a traceback and — for some Qt paths — take
+    the whole process down with it. Instead, log the error and show
+    it in plain words; the app stays open. The mic is already
+    isolated in a child process (mic_worker.py), so this is the
+    second line of defence, not the first.
+    """
+    import threading
+    import traceback
+
+    def _show(message: str) -> None:
+        try:
+            from PyQt5.QtWidgets import QApplication, QMessageBox
+
+            app = QApplication.instance()
+            if app is not None:
+                QMessageBox.warning(
+                    None, "Aries",
+                    "Something unexpected happened, but Aries is still "
+                    f"here:\n\n{message}")
+                return
+        except Exception:
+            pass
+        print(f"Aries hit an unexpected error and kept going: {message}",
+              file=sys.stderr)
+
+    def _hook(exc_type, exc_value, tb) -> None:
+        try:
+            traceback.print_exception(exc_type, exc_value, tb)
+        except Exception:
+            pass
+        _show(str(exc_value) or repr(exc_type))
+
+    def _thread_hook(args) -> None:
+        _hook(args.exc_type, args.exc_value, args.exc_traceback)
+
+    sys.excepthook = _hook
+    threading.excepthook = _thread_hook
+
+
+def _run_mic_helper(argv: list[str]) -> int | None:
+    """Run a hidden --mic-* helper flag in this process.
+
+    The mic helper is the app re-invoking itself (frozen .exe) or
+    ``python -m aries.main`` (dev) so all PortAudio work happens in
+    a child process that may crash without taking the app down.
+    Returns the exit code when a mic flag was given, else None.
+    """
+    if not argv or not argv[0].startswith("--mic-"):
+        return None
+    from . import mic_worker
+
+    return mic_worker.main(argv)
 
 SYSTEM_PROMPT = (
     "You are Aries, a helpful PC desktop companion and your "
@@ -36,6 +96,9 @@ SYSTEM_PROMPT = (
 
 def run_cli() -> None:
     """Text-only chat loop (Module 1)."""
+    from .config import get_api_key
+    from .llm import AriesLLMError, chat
+
     print(GREETING)
     try:
         get_api_key()
@@ -69,6 +132,12 @@ def run_cli() -> None:
 
 def main(argv: list[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
+    # Hidden mic-helper flags: run in a child process so PortAudio
+    # can never crash the app. Handled before anything else.
+    mic_code = _run_mic_helper(args)
+    if mic_code is not None:
+        return mic_code
+    _install_crash_guard()
     if "--cli" in args:
         run_cli()
         return 0
