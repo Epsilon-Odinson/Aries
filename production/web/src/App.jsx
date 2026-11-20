@@ -526,19 +526,29 @@ function LatestReply({ message, typed }) {
 }
 
 function Sources({ sources }) {
+  const [open, setOpen] = useState(false);
   return (
     <div className="sources">
-      <strong>Sources</strong>
-      <ul>
-        {sources.map((s, i) => (
-          <li key={i}>
-            <a href={s.url} target="_blank" rel="noreferrer">
-              {s.title || s.url}
-            </a>
-            {s.publisher ? ` — ${s.publisher}` : ""}
-          </li>
-        ))}
-      </ul>
+      <button
+        type="button"
+        className="sources-btn"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+      >
+        Sources ({sources.length}) {open ? "▴" : "▾"}
+      </button>
+      {open && (
+        <ul>
+          {sources.map((s, i) => (
+            <li key={i}>
+              <a href={s.url} target="_blank" rel="noreferrer">
+                {s.title || s.url}
+              </a>
+              {s.publisher ? ` — ${s.publisher}` : ""}
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }
