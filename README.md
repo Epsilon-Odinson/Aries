@@ -29,6 +29,16 @@ bad audio driver can never close the app), and the "Hey Aries" wake
 phrase. The PyQt UI (`aries/ui.py`) is legacy and no longer used by
 the shell.
 
+**0.9.0: the desktop catches up with everything the website gained
+since 0.8.0** — same bundled React app and same bundled server, so
+the PC app now has it all too: viewport fix, memory import, per-user
+soul ("How Aries is for you"), issue reporting, auto-learn + per-user
+memory file + always-on search, the login info button, the "bro"
+greeting fix, the account-name + brevity rules, and the Teacher skill
+(Study tab: slide/handout upload, Anki maker, quiz mode, summarizer,
+exam countdown, audio lessons). The sidecar also bundles python-pptx
++ pypdf so slide uploads work on the PC.
+
 **0.7.0: the desktop is now an Electron shell around the SAME React
 code as the web** — bundled locally into the installed app, never
 the live site in a window. The shell (`aries-shell/`, Electron)

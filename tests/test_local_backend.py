@@ -1,4 +1,4 @@
-"""Tests for the 0.8.0 local backend (aries/service.py + the
+"""Tests for the 0.9.0 local backend (aries/service.py + the
 production FastAPI app, run on the PC).
 
 The desktop app is self-contained: the sidecar runs the SAME
@@ -85,6 +85,79 @@ def _multipart_png(filename="test.png", size=(64, 64)):
     return body, boundary
 
 
+def _multipart_file(filename, content_type, data):
+    """One file field as a multipart body (same pattern as _multipart_png)."""
+    boundary = "----aries-test-boundary"
+    body = (
+        f"--{boundary}\r\n"
+        f'Content-Disposition: form-data; name="file"; filename="{filename}"\r\n'
+        f"Content-Type: {content_type}\r\n\r\n"
+    ).encode() + data + f"\r\n--{boundary}--\r\n".encode()
+    return body, boundary
+
+
+def _post_file(base, path, token, filename, content_type, data):
+    """POST one file to an upload endpoint, returning (status, json)."""
+    body, boundary = _multipart_file(filename, content_type, data)
+    req = urllib.request.Request(
+        base + path, data=body, method="POST",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": f"multipart/form-data; boundary={boundary}",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=60) as res:
+            return res.status, json.loads(res.read().decode())
+    except urllib.error.HTTPError as exc:
+        raw = exc.read().decode()
+        try:
+            return exc.code, json.loads(raw)
+        except ValueError:
+            return exc.code, {"detail": raw}
+
+
+def _tiny_pptx():
+    """A one-slide deck built with python-pptx (proves the dep works)."""
+    from pptx import Presentation
+    from pptx.util import Inches
+
+    prs = Presentation()
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    box = slide.shapes.add_textbox(Inches(1), Inches(1), Inches(4), Inches(1))
+    box.text_frame.text = "The mitochondria is the powerhouse of the cell."
+    buf = io.BytesIO()
+    prs.save(buf)
+    return buf.getvalue()
+
+
+def _tiny_pdf(text="Golgi apparatus"):
+    """A minimal one-page PDF with one text line, valid xref offsets."""
+    stream = f"BT /F1 24 Tf 100 700 Td ({text}) Tj ET".encode()
+    objs = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>",
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+        b"<< /Length %d >>\nstream\n" % len(stream) + stream + b"\nendstream",
+    ]
+    out = bytearray(b"%PDF-1.4\n")
+    offsets = []
+    for i, body in enumerate(objs, start=1):
+        offsets.append(len(out))
+        out += f"{i} 0 obj\n".encode() + body + b"\nendobj\n"
+    xref_pos = len(out)
+    out += f"xref\n0 {len(objs) + 1}\n".encode()
+    out += b"0000000000 65535 f \n"
+    for off in offsets:
+        out += f"{off:010d} 00000 n \n".encode()
+    out += (
+        f"trailer\n<< /Size {len(objs) + 1} /Root 1 0 R >>\n"
+        f"startxref\n{xref_pos}\n%%EOF".encode()
+    )
+    return bytes(out)
+
+
 class LocalBackendTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -119,7 +192,7 @@ class LocalBackendTest(unittest.TestCase):
         status, data = _call(self.base, "GET", "/health")
         self.assertEqual(status, 200)
         self.assertTrue(data["ok"])
-        self.assertEqual(data["version"], "0.8.0")
+        self.assertEqual(data["version"], "0.9.0")
         self.assertEqual(data["backend"], "local")
         self.assertEqual(data["db"], "sqlite")
         self.assertTrue(data["db_path"].startswith("~/.aries/"))
@@ -272,6 +345,92 @@ class LocalBackendTest(unittest.TestCase):
         self.assertTrue(data["ok"])
         status, data = _call(self.base, "GET", "/api/auth/me",
                              token=self.tokens["Kelfy"])
+        self.assertEqual(status, 401)
+
+    def _login_epsilon(self):
+        # test_12 logged Epsilon out; log back in for the study tests.
+        status, data = _call(self.base, "POST", "/api/auth/login",
+                             {"username": "Epsilon", "password": "testpass123"})
+        self.assertEqual(status, 200, data)
+        self.tokens["Epsilon"] = data["token"]
+
+    def test_13_study_txt_upload_and_isolation(self):
+        self._login_epsilon()
+        self._register("Kelfy")
+        txt = b"Cell structure notes.\nThe cell membrane is amphipathic.\n"
+        status, data = _post_file(self.base, "/api/study/materials",
+                                  self.tokens["Epsilon"], "notes.txt",
+                                  "text/plain", txt)
+        self.assertEqual(status, 200, data)
+        self.assertTrue(data["ok"])
+        self.assertEqual(data["kind"], "txt")
+        self.assertGreater(data["chars"], 20)
+        status, data = _call(self.base, "GET", "/api/study",
+                             token=self.tokens["Epsilon"])
+        self.assertEqual(status, 200)
+        self.assertEqual(len(data["materials"]), 1)
+        self.assertEqual(data["materials"][0]["filename"], "notes.txt")
+        # Kelfy sees none of Epsilon's study files.
+        status, data = _call(self.base, "GET", "/api/study",
+                             token=self.tokens["Kelfy"])
+        self.assertEqual(status, 200)
+        self.assertEqual(data["materials"], [])
+        self.assertEqual(data["sets"], [])
+        self.assertEqual(data["exams"], [])
+
+    def test_14_study_pptx_upload_parses(self):
+        # python-pptx must work in the local backend: a real .pptx
+        # upload reads its slide text (a missing dep would 400 here).
+        status, data = _post_file(
+            self.base, "/api/study/materials", self.tokens["Epsilon"],
+            "cells.pptx",
+            "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            _tiny_pptx())
+        self.assertEqual(status, 200, data)
+        self.assertEqual(data["kind"], "pptx")
+        self.assertGreater(data["chars"], 20)
+
+    def test_15_study_pdf_upload_parses(self):
+        # Same for pypdf: a real .pdf upload reads its text.
+        status, data = _post_file(self.base, "/api/study/materials",
+                                  self.tokens["Epsilon"], "cells.pdf",
+                                  "application/pdf", _tiny_pdf())
+        self.assertEqual(status, 200, data)
+        self.assertEqual(data["kind"], "pdf")
+        self.assertGreater(data["chars"], 0)
+
+    def test_16_study_exams_and_llm_endpoints_fail_honestly(self):
+        # Exam countdown: plain CRUD, days left computed at read time.
+        import datetime
+        future = (datetime.date.today() + datetime.timedelta(days=30)).isoformat()
+        status, data = _call(self.base, "POST", "/api/study/exams",
+                             {"name": "Anatomy paper 1", "subject": "Anatomy",
+                              "exam_date": future},
+                             token=self.tokens["Epsilon"])
+        self.assertEqual(status, 200, data)
+        self.assertGreater(data["exam"]["days_left"], 0)
+        status, data = _call(self.base, "GET", "/api/study",
+                             token=self.tokens["Epsilon"])
+        self.assertEqual(status, 200)
+        self.assertEqual(len(data["exams"]), 1)
+        # Anki + summarize need the LLM: with the dummy key they must
+        # fail honestly (502), never 404 (missing route) or 500.
+        status, data = _call(self.base, "POST", "/api/study/anki",
+                             {"topic": "cell structure"},
+                             token=self.tokens["Epsilon"])
+        self.assertEqual(status, 502, data)
+        self.assertIn("detail", data)
+        status, data = _call(self.base, "POST", "/api/study/summarize",
+                             {"text": "The mitochondria is the powerhouse of the cell. It makes ATP."},
+                             token=self.tokens["Epsilon"])
+        self.assertEqual(status, 502, data)
+        # Audio without a voice key: plain 503, not a crash.
+        status, data = _call(self.base, "POST", "/api/study/audio",
+                             {"text": "Hello, this is a lesson."},
+                             token=self.tokens["Epsilon"])
+        self.assertEqual(status, 503, data)
+        # Unauthenticated study state is 401 (routes exist, auth gates them).
+        status, data = _call(self.base, "GET", "/api/study")
         self.assertEqual(status, 401)
 
     def test_12_logout_kills_the_token(self):

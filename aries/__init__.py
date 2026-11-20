@@ -60,7 +60,16 @@ website. The cloud is only a fallback when the local service is down
 or has no engine key. Accounts work locally too, with the same rule:
 Epsilon (username "Epsilon") is admin by username, and Kelfy gets her
 own login on that PC with her own chats, memories and tasks.
+0.9.0 catches the desktop up with everything the website gained
+since 0.8.0 — same bundled React app and same bundled server, so
+nothing new to learn: viewport fix, memory import, per-user soul
+("How Aries is for you"), issue reporting, auto-learn + per-user
+memory file + always-on search, the login info button, the "bro"
+greeting fix, the account-name + brevity rules, and the Teacher
+skill (Study tab: slide/handout upload, Anki maker, quiz mode,
+summarizer, exam countdown, audio lessons). The sidecar now also
+bundles python-pptx + pypdf so slide uploads work on the PC.
 """
 
-__version__ = "0.8.0"
+__version__ = "0.9.0"
 __all__ = ["__version__"]

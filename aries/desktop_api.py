@@ -1,4 +1,4 @@
-"""Desktop-only routes for the Aries local backend (0.8.0).
+"""Desktop-only routes for the Aries local backend (0.9.0).
 
 The Electron shell's React app talks to ONE local origin
 (http://127.0.0.1:<port>) for everything: the full FastAPI backend
@@ -46,7 +46,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, Request
 
-__version__ = "0.8.0"
+__version__ = "0.9.0"
 
 # Where the desktop-only settings live (PC-control toggle). The
 # installed app dir may be read-only, so this is in the user's home.

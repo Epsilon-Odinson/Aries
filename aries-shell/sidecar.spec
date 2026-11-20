@@ -1,4 +1,4 @@
-# PyInstaller spec for the Aries local service (sidecar), 0.8.0.
+# PyInstaller spec for the Aries local service (sidecar), 0.9.0.
 # Builds aries-service.exe — the Python service the Electron shell
 # spawns on 127.0.0.1. Since 0.8.0 it is the WHOLE backend on the PC:
 # the production FastAPI app (chat, memory, tasks, voice, face,
@@ -48,6 +48,11 @@ for _pkg in (
     "PIL",
     "bs4",
     "cv2",
+    # Teacher skill (0.9.0): study.py lazily imports these for slide
+    # upload — collect them so the frozen exe can actually parse
+    # .pptx and .pdf on the PC instead of failing at upload time.
+    "pptx",
+    "pypdf",
 ):
     _d, _b, _h = collect_all(_pkg)
     _collected_datas += _d
