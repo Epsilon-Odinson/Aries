@@ -86,6 +86,10 @@ button { min-height: 2.5rem; font-family: inherit; }
   flex-direction: column;
   align-items: center;
   justify-content: center;
+  /* "safe" centering: if the column ever outgrows a short window, the
+     overflow goes to the bottom instead of clipping the face off the
+     top — the top of the page is never unreachable. */
+  justify-content: safe center;
   /* Bottom padding clears the dock, which in the working app also
      carries the composer — taller than the preview's dock. */
   padding: 1.5rem 1.25rem 12rem;
@@ -353,6 +357,25 @@ body.desktop-mini .stage {
    region, or Electron swallows the tap that restores full size. */
 body.desktop-mini .face-btn { cursor: pointer; -webkit-app-region: no-drag; }
 
+@media (max-height: 700px) {
+  /* Short windows (a laptop browser window, not fullscreen): shrink
+     the hero so the page fits without scrolling. The auth screen can
+     also scroll internally when it still doesn't (see .auth-screen),
+     and a long reply scrolls inside its own box instead of pushing
+     the face off the top of the screen. */
+  .visor { width: 150px; }
+  .greeting { margin-top: 0.9rem; }
+  .greeting h1 { font-size: 2.6rem; }
+  .status { margin: 0.8rem 0 0; }
+  .stage { padding: 1rem 1.25rem 9.5rem; }
+  .latest-reply { margin-top: 0.9rem; max-height: 28vh; overflow-y: auto; }
+  .latest-reply p { font-size: 0.95rem; line-height: 1.5; }
+  .latest-hint { margin-top: 0.9rem; }
+  .auth-screen { padding: 1rem; gap: 0.5rem; }
+  .auth-screen h1 { font-size: 2.6rem; }
+  .auth-screen .auth-sub { margin-bottom: 0.25rem; }
+}
+
 @media (max-height: 480px) {
   .visor { width: 110px; }
   .greeting { margin-top: 0.9rem; }
@@ -366,9 +389,9 @@ body.desktop-mini .face-btn { cursor: pointer; -webkit-app-region: no-drag; }
 }
 
 /* ---------- Working app: chat, reply, notices (purple, cream) ---------- */
-.aries-app { position: relative; min-height: 100vh; }
+.aries-app { position: relative; min-height: 100vh; min-height: 100dvh; }
 .aries-loading, .aries-error {
-  min-height: 100vh; display: flex; flex-direction: column;
+  min-height: 100vh; min-height: 100dvh; display: flex; flex-direction: column;
   align-items: center; justify-content: center; gap: 0.5rem;
   background: var(--bg-deep); color: var(--cream);
   font-family: var(--sans); text-align: center; padding: 2rem;
@@ -525,7 +548,7 @@ body.desktop-mini .face-btn { cursor: pointer; -webkit-app-region: no-drag; }
 .wizard-card label { display: block; margin: 0.75rem 0; }
 .wizard-card input, .wizard-card select { border-radius: 10px; width: 100%; }
 .lock-screen {
-  position: relative; min-height: 100vh; display: flex; flex-direction: column;
+  position: relative; min-height: 100vh; min-height: 100dvh; display: flex; flex-direction: column;
   align-items: center; justify-content: center; gap: 0.75rem; padding: 2rem; text-align: center;
   z-index: 4;
 }
@@ -645,12 +668,24 @@ body.desktop-mini .face-btn { cursor: pointer; -webkit-app-region: no-drag; }
 }
 
 /* ---------- Accounts: login screen ---------- */
+/* The screen is exactly one viewport tall and scrolls internally:
+   in a short windowed browser the form used to run past the bottom
+   of the page with no way to reach it (body scroll is off for the
+   app), so the Create account button was invisible until fullscreen.
+   Now the card shrinks on short screens (see the max-height media
+   query) and scrolls inside itself when it still doesn't fit. */
 .auth-screen {
   min-height: 100vh;
+  min-height: 100dvh;
+  height: 100dvh;
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
+  /* Same "safe" centering as .stage: overflow goes to the bottom,
+     never over the top, so the face and heading stay reachable. */
+  justify-content: safe center;
   gap: 0.75rem;
   padding: 2rem 1rem;
   text-align: center;

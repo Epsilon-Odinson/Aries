@@ -195,7 +195,7 @@ function pickVoice() {
 
 function speakBrowser(text, onErr) {
   if (!("speechSynthesis" in window)) {
-    onErr?.("This browser has no built-in voices, and the ElevenLabs voice isn't set up — talk-back can't speak here.");
+    onErr?.("This browser has no built-in voices, and the narrator voice isn't set up — talk-back can't speak here.");
     return;
   }
   // Chrome drops a speak() that follows cancel() too closely, so the
@@ -210,7 +210,7 @@ function speakBrowser(text, onErr) {
   u.pitch = 0.9;
   u.onerror = (e) => {
     if (e.error && e.error !== "canceled" && e.error !== "interrupted") {
-      onErr?.(`Talk-back failed in this browser (${e.error}).`);
+      onErr?.("Talk-back failed in this browser.");
     }
   };
   setTimeout(() => {
@@ -691,7 +691,7 @@ export default function App() {
       } else if (e.error === "aborted") {
         // Started over by something else — no need to alarm anyone.
       } else {
-        setNotice(`Mic error: ${e.error}. Typing works as normal.`);
+        setNotice("The microphone had a problem. Typing works as normal.");
       }
       maybeResumeWake();
     };
@@ -777,8 +777,8 @@ export default function App() {
     return (
       <div className="aries-error">
         <h1>ARIES</h1>
-        <p>Could not reach the Aries server: {error}</p>
-        <p>Check the backend is running, then reload.</p>
+        <p>Could not reach Aries.</p>
+        <p>Check your connection, then reload.</p>
         {isDesktop && getEngine() === "local" && (
           <button onClick={() => { setEngine("cloud"); window.location.reload(); }}>Use the cloud instead</button>
         )}
@@ -799,8 +799,8 @@ export default function App() {
     return (
       <div className="aries-error">
         <h1>ARIES</h1>
-        <p>Could not reach the Aries server: {error}</p>
-        <p>Check the backend is running, then reload.</p>
+        <p>Could not reach Aries.</p>
+        <p>Check your connection, then reload.</p>
         {isDesktop && getEngine() === "local" && (
           <button onClick={() => { setEngine("cloud"); window.location.reload(); }}>Use the cloud instead</button>
         )}
@@ -1035,7 +1035,7 @@ function LockScreen({ data, onUnlock }) {
         <input type="password" value={pin} onChange={(e) => setPin(e.target.value)} placeholder="Unlock PIN" />
         <button onClick={unlockPin}>Unlock with PIN</button>
       </div>
-      <p className="fine">Face login is a convenience lock (OpenCV LBPH), not biometric-grade security.</p>
+      <p className="fine">Face login is a convenience lock, not high security.</p>
     </div>
   );
 }
@@ -1105,7 +1105,7 @@ function VoicePicker({ elevenVoices, elevenConfigured, elevenDefaultId, elevenDe
   };
 
   const elevenNow = elevenSelected
-    ? (elevenVoices || []).find((v) => v.voice_id === elevenSelected)?.name || "ElevenLabs voice"
+    ? (elevenVoices || []).find((v) => v.voice_id === elevenSelected)?.name || "Narrator voice"
     : `${elevenDefaultName || "Adam"} (default)`;
 
   return (
@@ -1113,11 +1113,11 @@ function VoicePicker({ elevenVoices, elevenConfigured, elevenDefaultId, elevenDe
       <h3>Talk-back voice</h3>
       {elevenConfigured ? (
         <>
-          <h4>ElevenLabs voices</h4>
-          <p className="fine">A real narrator voice, served from the server. Tap Hear to try one, then Use this voice — this is the voice Aries speaks with.</p>
+          <h4>Narrator voices</h4>
+          <p className="fine">A real narrator voice. Tap Hear to try one, then Use this voice — this is the voice Aries speaks with.</p>
           <p>Now using: <strong>{elevenNow}</strong></p>
           <button onClick={() => chooseEleven(null)}>Use {elevenDefaultName || "Adam"} (default)</button>
-          {(elevenVoices || []).length === 0 && <p className="fine">No ElevenLabs voices listed — the server key may not have voices yet.</p>}
+          {(elevenVoices || []).length === 0 && <p className="fine">No narrator voices listed yet.</p>}
           <ul className="voice-list">
             {(elevenVoices || []).map((v) => (
               <li key={v.voice_id} className={elevenSelected === v.voice_id ? "on" : ""}>
@@ -1134,10 +1134,10 @@ function VoicePicker({ elevenVoices, elevenConfigured, elevenDefaultId, elevenDe
             ))}
           </ul>
           <h4>Voices on this device</h4>
-          <p className="fine">Fallback only — used when the ElevenLabs voice is unavailable.</p>
+          <p className="fine">Used only when the narrator voice is unavailable.</p>
         </>
       ) : (
-        <p className="fine">The ElevenLabs voice is not set up on the server yet — add the key in Render and Aries will speak with a real narrator voice. Until then, these are the voices on this device.</p>
+        <p className="fine">The narrator voice isn't set up yet. Until it is, these are the voices on this device.</p>
       )}
       <p className="fine">Tap Hear to try one, then tap Use this voice to make Aries speak with it. Your pick is saved on this device only.</p>
       <p>Now using: <strong>{selected || "Aries' default (masculine)"}</strong></p>
@@ -1200,9 +1200,9 @@ function ConnectionsSection() {
   return (
     <section>
       <h3>Connections</h3>
-      <p className="fine">Connect an account once and the skills that need it just work. Aries keeps the sign-in on the server — your password and tokens never appear here.</p>
+      <p className="fine">Connect an account once and the skills that need it just work. Your password never appears here.</p>
       {isDesktop && getEngine() === "local" && (
-        <p className="notice">On this PC, Gmail and Spotify connect through the web app — Google and Spotify only accept the registered cloud callback, so the sign-in has to happen there. Your connection lives in your cloud account; chats and memories on this PC stay on this PC.</p>
+        <p className="notice">On this PC, Gmail and Spotify connect through the web app instead — the sign-in has to happen there. Your connection lives in your cloud account; chats and memories on this PC stay on this PC.</p>
       )}
       {err && <p className="notice">{err}</p>}
       {!conns && !err && <p className="fine">Loading…</p>}
@@ -1214,7 +1214,7 @@ function ConnectionsSection() {
             <span className="fine">{r.desc}</span>
             {r.note && <span className="fine">{r.note}</span>}
             {!r.connected && !r.note && !r.configured && (
-              <span className="fine">Not set up on the server yet — add the {r.key === "google" ? "Google" : "Spotify"} client in Render first (see below).</span>
+              <span className="fine">Not set up yet — it needs a bit of setup first (see below).</span>
             )}
           </div>
           <div className="conn-actions">
@@ -1235,7 +1235,7 @@ function ConnectionsSection() {
       {isDesktop && getEngine() === "local" && (
         <button onClick={() => window.open("https://aries-ahvo.onrender.com", "_blank", "noopener")}>Open the web app</button>
       )}
-      <p className="fine">Setting up Gmail or Spotify needs a free developer app first. In Google Cloud Console / Spotify Developer Dashboard, create an OAuth app and add these redirect URLs — {isDesktop ? "https://aries-ahvo.onrender.com" : window.location.origin}/api/connections/google/callback and {isDesktop ? "https://aries-ahvo.onrender.com" : window.location.origin}/api/connections/spotify/callback — then add the client ID and secret in Render (Environment) as GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET and SPOTIFY_CLIENT_ID / SPOTIFY_CLIENT_SECRET.</p>
+      <p className="fine">Connecting Gmail or Spotify takes a bit of setup first — a free developer app with Google or Spotify. If you want to set it up, ask Aries and it will walk you through it.</p>
     </section>
   );
 }
@@ -1298,7 +1298,7 @@ function DesktopSection() {
       <h3>Desktop</h3>
       <p className="fine">Engine: {engine === "local"
         ? "on this PC — chats, memories and tasks live on this PC."
-        : "cloud (aries-ahvo.onrender.com) — chats, memories and tasks live in your cloud account."}</p>
+        : "Cloud — chats, memories and tasks live in your cloud account."}</p>
       <div className="toggle-row">
         <button className="pill" type="button" aria-pressed={engine === "local"} disabled={!svc} onClick={() => switchEngine("local")}>
           This PC
@@ -1308,7 +1308,7 @@ function DesktopSection() {
         </button>
       </div>
       <p className="fine">Local service: {svc
-        ? `running — backend on this PC, data at ${svc.db_path || "~/.aries/aries.db"}`
+        ? "running."
         : "not running — PC control, mic and wake phrase need it. Restart the app."}</p>
       <div className="toggle-row">
         <button className="pill" type="button" aria-pressed={pcOn} onClick={togglePc}>
@@ -1316,15 +1316,15 @@ function DesktopSection() {
         </button>
       </div>
       <p className="fine">PC control is off by default. When on, Aries asks before acting on your PC — and asks a second time before anything destructive (shutdown, restart, delete).</p>
-      <label>Engine key (NVIDIA, for chat and PC actions)
-        <input type="password" value={key} onChange={(e) => setKey(e.target.value)} placeholder="nvapi-…" />
+      <label>Engine key — for chat and PC actions
+        <input type="password" value={key} onChange={(e) => setKey(e.target.value)} placeholder="Paste your key here" />
       </label>
-      <p className="fine">Status: {keyState.has_key ? `saved (${keyState.source})` : "no key on this PC yet"}. The key is saved to the Windows Credential Manager, never in code.</p>
+      <p className="fine">Status: {keyState.has_key ? "saved on this PC" : "no key on this PC yet"}. The key is saved securely on this PC.</p>
       <button onClick={saveKey}>Save engine key</button>
-      <label>Voice key (ElevenLabs, for talk-back)
-        <input type="password" value={elevenKey} onChange={(e) => setElevenKey(e.target.value)} placeholder="sk-…" />
+      <label>Voice key — for talk-back
+        <input type="password" value={elevenKey} onChange={(e) => setElevenKey(e.target.value)} placeholder="Paste your key here" />
       </label>
-      <p className="fine">Status: {elevenState.has_key ? `saved (${elevenState.source})` : "no voice key on this PC yet — talk-back uses the device's built-in voices"}. The key is saved to the Windows Credential Manager, never in code.</p>
+      <p className="fine">Status: {elevenState.has_key ? "saved on this PC" : "no voice key on this PC yet — talk-back uses the device's built-in voices"}. The key is saved securely on this PC.</p>
       <button onClick={saveElevenKey}>Save voice key</button>
       {msg && <p className="notice">{msg}</p>}
     </section>
@@ -1391,7 +1391,6 @@ function AuthScreen({ onAuthed }) {
       >
         {mode === "login" ? "No account yet? Create one" : "Already have an account? Sign in"}
       </button>
-      <p className="fine">Epsilon signs in as “Epsilon” — that account is the admin, no matter when it was created.</p>
     </div>
   );
 }
@@ -1424,14 +1423,14 @@ function AdminPanel() {
   }
   return (
     <section>
-      <h3>Admin — accounts</h3>
-      <p className="fine">Everyone gets their own account and their own data. Only “Epsilon” is admin — by username, not by who signed up first.</p>
+      <h3>Accounts</h3>
+      <p className="fine">Everyone gets their own account and their own data.</p>
       {err && <p className="notice">{err}</p>}
       {!users && !err && <p className="fine">Loading…</p>}
       <ul className="user-list">
         {(users || []).map((u) => (
           <li key={u.username}>
-            <span><strong>{u.username}</strong> — {u.role}{u.created_at ? ` · since ${new Date(u.created_at).toLocaleDateString()}` : ""}</span>
+            <span><strong>{u.username}</strong>{u.created_at ? ` · since ${new Date(u.created_at).toLocaleDateString()}` : ""}</span>
             {u.role !== "admin" && (
               <button disabled={busy} onClick={() => remove(u.username)}>Delete</button>
             )}
@@ -1486,7 +1485,7 @@ function VoiceSelfTest({ elevenConfigured, elevenDefaultName }) {
         ok: false,
         text: e?.name === "NotAllowedError"
           ? "Microphone test: blocked. Allow the microphone for this site in the browser's site settings, then test again."
-          : `Microphone test failed: ${e?.name || "unknown error"}.`,
+          : "Microphone test failed — try again.",
       };
     }
     try {
@@ -1499,8 +1498,8 @@ function VoiceSelfTest({ elevenConfigured, elevenDefaultName }) {
       r.voices = { ok: false, text: "Talk-back voices: speech synthesis isn't available in this browser." };
     }
     r.eleven = elevenConfigured
-      ? { ok: true, text: `ElevenLabs voice: set up — Aries talks back with ${elevenDefaultName || "Adam"}.` }
-      : { ok: false, text: "ElevenLabs voice: not set up on the server — talk-back uses the device's voices." };
+      ? { ok: true, text: `Narrator voice: set up — Aries talks back with ${elevenDefaultName || "Adam"}.` }
+      : { ok: false, text: "Narrator voice: not set up — talk-back uses the device's voices." };
     setResults(r);
     setRunning(false);
   }
@@ -1510,13 +1509,13 @@ function VoiceSelfTest({ elevenConfigured, elevenDefaultName }) {
     ["Microphone permission", results.mic],
     ["Microphone test", results.micLive],
     ["Talk-back voices", results.voices],
-    ["ElevenLabs voice", results.eleven],
+    ["Narrator voice", results.eleven],
   ] : [];
 
   return (
     <div className="voice-test">
       <h3>Voice self-test</h3>
-      <p className="fine">Checks each voice path and says plainly what works. The microphone test asks the browser for the mic — that prompt is the test.</p>
+      <p className="fine">Checks the microphone, recognition and talk-back, and says plainly what works. The microphone test asks the browser for the mic — that prompt is the test.</p>
       <button disabled={running} onClick={run}>{running ? "Testing…" : "Run voice test"}</button>
       {rows.map(([label, res]) => (
         <p key={label} className="test-row">
@@ -1677,11 +1676,11 @@ function MoreSheet({ data, user, onLogout, tab, setTab, onClose, useSearch, setU
           </ul>
           {memories.length === 0 && <p>No memories yet. Teach Aries something above, or say “remember …” in chat.</p>}
           <h3>About you — from Aries' memory file</h3>
-          <p className="fine">Durable facts Aries always knows, kept in its memory file on the server. This is read-only — day-to-day things Aries learns live in the vault above.</p>
+          <p className="fine">Facts Aries always knows about you. This is read-only — day-to-day things Aries learns live in the vault above.</p>
           {data.memory_file ? (
             <div className="memory-file">{data.memory_file}</div>
           ) : (
-            <p className="fine">No memory file on the server yet.</p>
+            <p className="fine">Nothing here yet.</p>
           )}
           <h3>Full history</h3>
           <button onClick={async () => { if (confirm("Clear all chat history?")) { await api.clearChat(true); onClose(); } }}>
@@ -1702,7 +1701,7 @@ function MoreSheet({ data, user, onLogout, tab, setTab, onClose, useSearch, setU
         <>
         <section>
           <h3>Account</h3>
-          <p>Signed in as <strong>{user?.username}</strong>{user?.role === "admin" ? " — admin" : ""}. Your chats, memories and tasks are yours alone.</p>
+          <p>Signed in as <strong>{user?.username}</strong>. Your chats, memories and tasks are yours alone.</p>
           <button onClick={onLogout}>Log out</button>
         </section>
         {user?.role === "admin" && <AdminPanel />}
@@ -1744,7 +1743,7 @@ function MoreSheet({ data, user, onLogout, tab, setTab, onClose, useSearch, setU
 
         <section>
           <h3>Permissions</h3>
-          <p className="fine">Aries asks before anything sensitive. “Never” hard-blocks on the server.</p>
+          <p className="fine">Aries asks before anything sensitive. Setting something to “Never” blocks it completely.</p>
           {Object.entries(perms).map(([cap, setting]) => (
             <label key={cap}>{PERM_LABELS[cap] || cap}
               <select
@@ -1767,10 +1766,10 @@ function MoreSheet({ data, user, onLogout, tab, setTab, onClose, useSearch, setU
           <h3>Face login</h3>
           <p>Status: {data.face?.enrolled ? "Enrolled" : "Not enrolled"}</p>
           <input type="file" accept="image/*" onChange={(e) => setFaceFile(e.target.files[0])} />
-          <input type="password" value={facePin} onChange={(e) => setFacePin(e.target.value)} placeholder="Unlock PIN (optional, sets fallback)" />
+          <input type="password" value={facePin} onChange={(e) => setFacePin(e.target.value)} placeholder="Unlock PIN (optional)" />
           <button onClick={enroll}>Enroll my face</button>
           {data.face?.enrolled && <button onClick={() => { if (confirm("Remove face enrollment?")) api.removeFace().then(onClose); }}>Remove enrollment</button>}
-          <p className="fine">OpenCV LBPH recognition — a convenience lock, not biometric-grade security. The PIN is the real fallback; only its hash is stored.</p>
+          <p className="fine">Face login is a convenience lock, not high security. Set a PIN as a backup way to unlock.</p>
         </section>
 
         <section>
@@ -1784,23 +1783,16 @@ function MoreSheet({ data, user, onLogout, tab, setTab, onClose, useSearch, setU
 
         <section>
           <h3>Desktop app &amp; installer</h3>
-          <p>The desktop app is the same React app as this website,
-            bundled locally into a real installed PC program — never the
-            live site in a window. It fills the full screen when activated,
-            is freely resizable, and tapping the bot drops it into mini mode
-            floating bottom-right, just above the taskbar. A local backend
-            on your PC handles chat, search, memory, voice, PC control,
-            the microphone and the wake phrase — the cloud is only a
-            fallback when the local service is down. Your chats and
-            memories on this PC live on this PC.</p>
-          <p><strong>Engine key:</strong> on this PC it lives in the Windows Credential
-            Manager; in the cloud it stays server-side. The installer never
-            contains an API key. Aries is private
+          <p>The desktop app is the same Aries, installed on your PC. It fills
+            the full screen when activated, is freely resizable, and tapping
+            the bot drops it into mini mode floating bottom-right, just
+            above the taskbar. On your PC, your chats and memories stay on
+            your PC — the cloud is only a backup.</p>
+          <p><strong>Engine key:</strong> on this PC it's saved securely on your
+            PC; in the cloud you never have to think about it. Aries is private
             to Epsilon and Kelfy until it goes commercial.</p>
-          <p><strong>Roadmap:</strong> web search ✓ · voice ✓ · tasks ✓ · installer ✓ ·
-            face login ✓ · screenshot ✓ · PC control ✓ (in the desktop app).</p>
           <a className="download-btn" href="https://github.com/Epsilon-Odinson/Aries/releases/download/v0.8.0-desktop/Aries-Setup.exe">Download for Windows (Installer)</a>
-          <p style={{ marginTop: "8px" }}>The installer sets up Aries, offers a desktop shortcut and a taskbar pin. Prefer the portable single file instead? Get <a href="https://github.com/Epsilon-Odinson/Aries/releases/download/v0.8.0-desktop/Aries.exe">Aries.exe</a> from the same release.</p>
+          <p style={{ marginTop: "8px" }}>The installer sets up Aries, offers a desktop shortcut and a taskbar pin. Prefer the portable single file instead? Get <a href="https://github.com/Epsilon-Odinson/Aries/releases/download/v0.8.0-desktop/Aries.exe">Aries.exe</a>.</p>
         </section>
 
         {isDesktop && <DesktopSection />}
@@ -1831,8 +1823,7 @@ function SetupWizard({ onDone, onSkip }) {
       <div className="wizard-card">
         <h2>Welcome to Aries</h2>
         <p className="fine">Step {step + 1} of {steps.length}: {steps[step]}</p>
-        <p className="fine">One thing setup never asks for: an API key. The engine key is never
-          in the app itself — {isDesktop ? "on this PC it lives in the Windows Credential Manager." : "on the web it stays server-side only, never on your device."}</p>
+        <p className="fine">Setup never asks for any keys — they stay out of the app entirely.</p>
         {step === 1 && (
           <label>What should Aries call you?
             <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Your name" />
