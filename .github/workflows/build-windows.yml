@@ -1,16 +1,22 @@
-# Build the Aries desktop app 0.7.0 (Electron shell + Python sidecar)
+# Build the Aries desktop app 0.8.0 (Electron shell + Python sidecar)
 # and publish the installer + portable app as GitHub Release assets.
 #
-# Trigger it by pushing a tag like v0.7.0-desktop, or by hand from the
+# Trigger it by pushing a tag like v0.8.0-desktop, or by hand from the
 # Actions tab (workflow_dispatch). The installer (Aries-Setup.exe,
 # electron-builder NSIS) installs Aries, offers a desktop shortcut
 # and a taskbar pin. Aries.exe is the portable single file.
-# The shell renders the SAME React app as the web, bundled locally —
-# it never loads the live website. A local Python service on
-# 127.0.0.1 handles PC control, the microphone and the wake phrase.
-# No API key is needed on first run — chat uses the server like the
-# website does. PC actions need the NVIDIA engine key, added in
-# Settings → More → Desktop (saved to the Windows Credential Manager).
+#
+# 0.8.0: the PC app is self-contained — the sidecar runs the FULL
+# production backend on the PC (chat, memory, tasks, voice, face,
+# screenshot — the same FastAPI app the website runs), against a
+# local SQLite database in %USERPROFILE%\.aries. The cloud is only a
+# fallback when the local service is down. No API key is needed on
+# first run if the user switches to the cloud; on this PC the engine
+# key lives in the Windows Credential Manager (Settings → More →
+# Desktop). PC control is off by default — turn it on in Settings,
+# and add the NVIDIA engine key there for chat and PC actions.
+# Mini mode: press the face to shrink to the floating face, press it
+# again (or the Full screen button) to come back to full size.
 #
 # The release step only runs for tag pushes. A manual dispatch just
 # builds and uploads the files as workflow artifacts. The release
@@ -46,7 +52,7 @@ jobs:
           python-version: "3.11"
 
       - name: Check Python syntax
-        run: python -m compileall -q aries
+        run: python -m compileall -q aries production/server/app run_aries.py
 
       - name: Build the React app into the shell
         shell: bash
@@ -65,6 +71,28 @@ jobs:
           if (-not (Test-Path dist\aries-service.exe)) { exit 1 }
           New-Item -ItemType Directory -Force -Path aries-shell\sidecar | Out-Null
           Copy-Item dist\aries-service.exe aries-shell\sidecar\aries-service.exe
+
+      - name: Smoke-test the sidecar (local backend)
+        run: |
+          $proc = Start-Process -FilePath "dist\aries-service.exe" -ArgumentList "--port","0" -RedirectStandardOutput "sidecar-smoke.log" -RedirectStandardError "sidecar-smoke-err.log" -PassThru -WindowStyle Hidden
+          try {
+            $port = $null
+            for ($i=0; $i -lt 90 -and -not $port; $i++) {
+              Start-Sleep -Seconds 1
+              if (Test-Path sidecar-smoke.log) {
+                $m = Select-String -Path sidecar-smoke.log -Pattern "ARIES_SERVICE_PORT=(\d+)" | Select-Object -First 1
+                if ($m) { $port = $m.Matches.Groups[1].Value }
+              }
+            }
+            if (-not $port) { Get-Content sidecar-smoke.log, sidecar-smoke-err.log -ErrorAction SilentlyContinue | Select-Object -Last 40; throw "sidecar did not print its port" }
+            $h = Invoke-RestMethod "http://127.0.0.1:$port/health"
+            if (-not $h.ok -or $h.backend -ne "local") { throw "local /health bad: $($h | ConvertTo-Json -Compress)" }
+            $ah = Invoke-RestMethod "http://127.0.0.1:$port/api/health"
+            if (-not $ah.ok) { throw "local /api/health bad" }
+            Write-Host "Sidecar smoke test passed on port $port (local backend $($h.version), api $($ah.version), db $($h.db))"
+          } finally {
+            Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+          }
 
       - name: Build the installer + portable app
         run: npx electron-builder --win --x64
@@ -97,7 +125,7 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         run: |
           $tag = "${{ github.ref_name }}"
-          $notes = "Windows build of the Aries desktop app (0.7.0) — the Electron shell. The same React app as the website, bundled locally into a real installed PC program (never the live site in a window), so the desktop is pixel-identical to the web: same veil, same pointer orb, same fonts, same Settings. Aries-Setup.exe is the installer — it installs Aries, offers a desktop shortcut and a taskbar pin. Aries.exe is the portable single file — download and run it, no install needed. No API key needed on first run — chat uses the server like the website does. PC control, the microphone and the wake phrase run through a local service on your PC. PC control is off by default — turn it on in Settings, and add the NVIDIA engine key there for PC actions. Mini mode: press the face to shrink to the floating face, press it again to come back to full size."
+          $notes = "Windows build of the Aries desktop app (0.8.0) — the Electron shell. The same React app as the website, bundled locally into a real installed PC program (never the live site in a window), so the desktop is pixel-identical to the web: same veil, same pointer orb, same fonts, same Settings. NEW in 0.8.0: the PC app is self-contained — the local service runs the full backend on your PC (chat, memory, tasks, voice, face login, screenshot), so it works without the live website; the cloud is only a fallback. Your chats and memories on the PC live on the PC. Everyone gets their own login: Epsilon (username Epsilon) is the admin, Kelfy makes her own account and sees only hers. Aries-Setup.exe is the installer — it installs Aries, offers a desktop shortcut and a taskbar pin. Aries.exe is the portable single file — download and run it, no install needed. Add the NVIDIA engine key in Settings → More → Desktop (saved to the Windows Credential Manager) for chat and PC actions, or switch the engine to Cloud there to use the website's backend instead. PC control is off by default — turn it on in Settings. Mini mode: press the face to shrink to the floating face, press it again (or the Full screen button) to come back to full size."
           gh release view $tag --json tagName -q .tagName 2>$null | Out-Null
           if ($LASTEXITCODE -eq 0) {
             gh release upload $tag "aries-shell/dist-installer/Aries.exe" "aries-shell/dist-installer/Aries-Setup.exe" --clobber
@@ -105,4 +133,4 @@ jobs:
             gh release create $tag --title "Aries desktop $tag" --notes $notes "aries-shell/dist-installer/Aries.exe" "aries-shell/dist-installer/Aries-Setup.exe"
           }
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
