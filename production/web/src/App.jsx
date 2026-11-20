@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Veil from "./Veil.jsx";
 import Face from "./Face.jsx";
-import { api, local, isDesktop, getToken, setToken, getEngine, setEngine, engineLabel, isNetworkError } from "./api.js";
+import { api, local, isDesktop, getToken, setToken, getEngine, setEngine, isNetworkError } from "./api.js";
 
 // Desktop shell only: does a message look like a PC action (open an
 // app, type, click, shutdown, screenshot, ...)? Port of the Python
@@ -293,6 +293,15 @@ export default function App() {
   const [locked, setLocked] = useState(false);
   const [setupOpen, setSetupOpen] = useState(false);
   const [notice, setNotice] = useState("");
+  // This-PC engine with no engine key: offer the one-tap switch to
+  // the cloud (which already has the keys) instead of only telling
+  // the user to paste one. Covers the chat reply ("No engine key on
+  // this PC…") and the PC-actions notice ("PC actions need the engine
+  // key…"). It clears itself once a real reply comes back.
+  const keyMissing = isDesktop && getEngine() === "local" && (
+    (lastAries && lastAries.content.includes("No engine key on this PC")) ||
+    notice.includes("engine key")
+  );
   // Accounts: nobody sees chat before signing in. user is null until
   // /api/auth/me confirms the stored token; authReady says the check
   // has run, so the login screen never flashes over a signed-in app.
@@ -865,6 +874,12 @@ export default function App() {
       {!locked && (
         <div className="dock">
           {notice && <p className="notice" onClick={() => setNotice("")}>{notice} ✕</p>}
+          {keyMissing && (
+            <div className="toggle-row" role="group" aria-label="Switch to the cloud">
+              <span className="fine">No key needed on the cloud — it is already set up there.</span>
+              <button type="button" className="pill" onClick={() => { setEngine("cloud"); window.location.reload(); }}>Use the cloud instead</button>
+            </div>
+          )}
           <div className="composer-row">
             <input
               ref={inputRef}
@@ -1357,6 +1372,15 @@ function AuthScreen({ onAuthed }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const [showInfo, setShowInfo] = useState(false);
+  // Where Aries runs — chosen here, before signing up, so nobody
+  // has to paste a key to get started. Cloud is the default: the
+  // keys are already set up there. "On this PC" is the offline
+  // option and needs the user's own keys.
+  const [engine, setEngineState] = useState(getEngine());
+  function pickEngine(mode) {
+    setEngine(mode);
+    setEngineState(mode);
+  }
   async function submit(e) {
     e.preventDefault();
     if (!username.trim() || !password) { setErr("Enter a username and a password."); return; }
@@ -1395,7 +1419,27 @@ function AuthScreen({ onAuthed }) {
         </div>
       )}
       <p className="auth-sub">Sign in to your own Aries. Your chats, memories and tasks are yours alone.</p>
-      <p className="fine">Signing in {engineLabel()} — {getEngine() === "local" ? "your chats, memories and tasks live on this PC." : "your chats, memories and tasks live in your cloud account."}</p>
+      <p className="fine">Signing in {engine === "local" ? "on this PC" : "in the cloud"} — {engine === "local" ? "your chats, memories and tasks live on this PC." : "your chats, memories and tasks live in your cloud account."}</p>
+      {isDesktop && (
+        <div className="toggle-row" role="group" aria-label="Where Aries runs">
+          <button
+            type="button"
+            className="pill"
+            aria-pressed={engine === "cloud"}
+            onClick={() => pickEngine("cloud")}
+          >
+            Cloud — recommended, no setup
+          </button>
+          <button
+            type="button"
+            className="pill"
+            aria-pressed={engine === "local"}
+            onClick={() => pickEngine("local")}
+          >
+            On this PC — works offline, needs your own keys
+          </button>
+        </div>
+      )}
       <form onSubmit={submit}>
         <input
           value={username}

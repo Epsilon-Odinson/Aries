@@ -6,13 +6,16 @@
 // preload) gives the local Python service address and the cloud API
 // address, and the app picks an engine:
 //
-// - "local" (desktop only, default when the local service is up):
-//   the full backend runs on this PC — chat, memory, tasks, voice,
-//   face login, everything — against a local database in ~/.aries.
-//   The local service IS the backend; the cloud is not involved.
 // - "cloud": the Render backend (aries-ahvo.onrender.com), the same
-//   one the website uses. The fallback when the local service is
-//   down, and the only engine on the web.
+//   one the website uses. The DEFAULT on the desktop too when no
+//   engine preference is stored: the cloud already has the engine
+//   and voice keys set up, so a fresh user signs up and everything
+//   just works — nobody has to paste a key.
+// - "local" (desktop only, opt-in): the full backend runs on this
+//   PC — chat, memory, tasks, voice, face login, everything —
+//   against a local database in ~/.aries. The local service IS the
+//   backend; the cloud is not involved. Picked explicitly, in
+//   Settings or on the sign-in screen; it needs the user's own keys.
 //
 // The engine is stored per device in localStorage ("ariesEngine").
 // Each engine has its own session token ("ariesToken" for the cloud,
@@ -30,7 +33,10 @@ export function getEngine() {
     const e = window.localStorage.getItem(ENGINE_KEY);
     if (e === "cloud" || e === "local") return e;
   } catch { /* ignore */ }
-  return DESK.localApi ? "local" : "cloud";
+  // No preference stored: cloud, even when the local service is up.
+  // A stored preference is always respected (see the check above),
+  // so existing users who already picked This PC keep it.
+  return "cloud";
 }
 export function setEngine(mode) {
   try {
