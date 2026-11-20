@@ -42,9 +42,11 @@ from sqlalchemy.orm import Session
 from . import auth as auth_mod
 from . import connections as conn_mod
 from . import face as face_mod
+from . import study as study_mod
 from . import voice as voice_mod
 from .db import (
     Connection,
+    ExamCountdown,
     FaceEnrollment,
     IssueReport,
     Memory,
@@ -52,7 +54,10 @@ from .db import (
     Permission,
     Personality,
     Profile,
+    QuizSession,
     Screenshot,
+    StudyMaterial,
+    StudySet,
     Task,
     User,
     get_db,
@@ -470,6 +475,9 @@ class ChatOut(BaseModel):
     pending_memory: dict | None = None
     task_added: dict | None = None
     needs_permission: str | None = None
+    # A file the reply offers, e.g. Anki cards just made:
+    # {"label": "Download cards (.tsv)", "url": "/api/study/anki/3"}.
+    download: dict | None = None
 
 
 REMIND_RE = re.compile(
@@ -637,6 +645,191 @@ def _is_search_exempt(text: str) -> bool:
     return False
 
 
+# ---------------------------------------------------------------- study in chat
+
+# The study skill in conversation: "quiz me on X", "make Anki cards",
+# "summarize ...". These are explicit commands, handled before
+# memory learning and web search, and they return early — so a quiz
+# answer is never learned as a fact about the user and never sent
+# to a web search. A plain "teach me X" is NOT a quiz: it goes
+# through the normal chat path, where the teacher section of the
+# prompt and the material grounding do the work.
+_QUIZ_START_RE = re.compile(
+    r"\b(?:quiz|test)\s+me\b\s*(?:(?:on|about|over)\s+)?(.*)", re.IGNORECASE
+)
+_QUIZ_STOP_RE = re.compile(
+    r"^(stop|end|finish|cancel)\s+(the\s+)?(quiz|test)\b", re.IGNORECASE
+)
+_ANKI_RE = re.compile(
+    r"\bmake\s+(?:me\s+)?(?:some\s+)?(?:anki\s+)?cards?\b"
+    r"|\bcreate\s+(?:anki\s+)?cards?\b"
+    r"|\bgenerate\s+(?:anki\s+)?cards?\b",
+    re.IGNORECASE,
+)
+_SUMMARIZE_RE = re.compile(r"^summari[sz]e\b", re.IGNORECASE)
+
+
+def _store_reply(db: Session, user_key: str, reply: str, sources=None) -> None:
+    db.add(Message(user_key=user_key, role="aries", content=reply, sources=_sources_json(sources or [])))
+    db.commit()
+
+
+def _start_quiz(db: Session, user_key: str, topic: str) -> ChatOut:
+    topic = (topic or "").strip(" .!?,")
+    if not topic:
+        reply = "What should I quiz you on? Say e.g. \"quiz me on cell structure\"."
+        _store_reply(db, user_key, reply)
+        return ChatOut(reply=reply)
+    # One quiz at a time: starting a new one ends the old one.
+    old = study_mod.get_active_quiz(db, user_key)
+    if old:
+        study_mod.end_quiz(db, old)
+    mat = study_mod.match_material(db, user_key, topic)
+    try:
+        question, answer = study_mod.quiz_question(topic, mat.text if mat else "")
+    except AriesLLMError as exc:
+        reply = f"I couldn't start the quiz right now — {exc}"
+        _store_reply(db, user_key, reply)
+        return ChatOut(reply=reply)
+    quiz = QuizSession(
+        user_key=user_key,
+        topic=topic,
+        material_id=mat.id if mat else None,
+        current_question=question,
+        current_answer=answer,
+    )
+    db.add(quiz)
+    db.commit()
+    reply = f"{question}\n\nReply with your answer — or say \"stop quiz\" when you're done."
+    _store_reply(db, user_key, reply)
+    return ChatOut(reply=reply)
+
+
+def _answer_quiz(db: Session, user_key: str, quiz: QuizSession, text: str) -> ChatOut:
+    try:
+        correct, note = study_mod.quiz_judge(quiz.current_question, quiz.current_answer, text)
+    except AriesLLMError as exc:
+        reply = (
+            f"I couldn't mark that right now — {exc} "
+            "Your answer is kept; try again, or say \"stop quiz\"."
+        )
+        _store_reply(db, user_key, reply)
+        return ChatOut(reply=reply)
+    quiz.total += 1
+    if correct:
+        quiz.score += 1
+    quiz.updated_at = datetime.utcnow()
+    db.commit()
+    try:
+        mat = (
+            db.query(StudyMaterial).filter_by(id=quiz.material_id, user_key=user_key).first()
+            if quiz.material_id
+            else None
+        )
+        question, answer = study_mod.quiz_question(quiz.topic, mat.text if mat else "")
+    except AriesLLMError:
+        # Could not think of the next question: end gracefully with
+        # the score, rather than leaving the quiz hanging.
+        study_mod.end_quiz(db, quiz)
+        reply = f"{note}\n\nThat's the end of the quiz for now — you got {quiz.score} out of {quiz.total} right."
+        _store_reply(db, user_key, reply)
+        return ChatOut(reply=reply)
+    quiz.current_question, quiz.current_answer = question, answer
+    quiz.updated_at = datetime.utcnow()
+    db.commit()
+    reply = f"{note}\n\nNext: {question}"
+    _store_reply(db, user_key, reply)
+    return ChatOut(reply=reply)
+
+
+def _stop_quiz(db: Session, user_key: str, quiz: QuizSession) -> ChatOut:
+    study_mod.end_quiz(db, quiz)
+    if quiz.total:
+        reply = f"Quiz done — you got {quiz.score} out of {quiz.total} right on {quiz.topic}."
+    else:
+        reply = f"Quiz stopped — no questions answered yet on {quiz.topic}."
+    _store_reply(db, user_key, reply)
+    return ChatOut(reply=reply)
+
+
+def _make_anki(db: Session, user_key: str, text: str) -> ChatOut:
+    m = re.search(r"\b(?:from|on|about)\s+(.+)$", text.strip(), re.IGNORECASE)
+    topic = m.group(1).strip(" .!?,") if m else ""
+    mat = None
+    if topic:
+        mat = study_mod.match_material(db, user_key, topic)
+    if not mat:
+        # No topic, or the topic named nothing: use the newest file.
+        mat = (
+            db.query(StudyMaterial)
+            .filter_by(user_key=user_key)
+            .order_by(StudyMaterial.created_at.desc())
+            .first()
+        )
+    if mat and not topic:
+        topic = mat.filename or "your material"
+    if not mat and not topic:
+        reply = (
+            "What should the cards be on — a topic, or one of your "
+            "study files? Say e.g. \"make Anki cards on cell structure\"."
+        )
+        _store_reply(db, user_key, reply)
+        return ChatOut(reply=reply)
+    try:
+        cards = study_mod.generate_anki(mat.text if mat else "", topic or "general knowledge")
+    except AriesLLMError as exc:
+        reply = f"I couldn't make the cards right now — {exc}"
+        _store_reply(db, user_key, reply)
+        return ChatOut(reply=reply)
+    if not cards:
+        reply = "I couldn't find any clear facts to turn into cards there. Try a different topic or file."
+        _store_reply(db, user_key, reply)
+        return ChatOut(reply=reply)
+    tsv = study_mod.anki_tsv(cards)
+    stored, _path = study_mod.save_anki_set(user_key, topic, tsv)
+    row = StudySet(user_key=user_key, name=topic, filename=stored, card_count=len(cards))
+    db.add(row)
+    db.commit()
+    if mat:
+        reply = f"Made {len(cards)} cards on {topic}, from your {mat.filename}."
+    else:
+        reply = (
+            f"Made {len(cards)} cards on {topic}, from what I know — "
+            "upload your slides on it and I'll make them from those next time."
+        )
+    _store_reply(db, user_key, reply)
+    return ChatOut(
+        reply=reply,
+        download={"label": f"Download {len(cards)} cards (.tsv)", "url": f"/api/study/anki/{row.id}"},
+    )
+
+
+def _summarize_chat(db: Session, user_key: str, text: str) -> ChatOut:
+    stripped = text.strip()
+    rest = re.sub(r"^summari[sz]e\s+", "", stripped, flags=re.IGNORECASE).strip()
+    rest = re.sub(r"^this\s*:?\s*", "", rest, flags=re.IGNORECASE).strip()
+    mat = None
+    source = ""
+    if len(rest) >= 200:
+        source = rest
+    elif rest:
+        mat = study_mod.match_material(db, user_key, rest)
+        if mat:
+            source = mat.text or ""
+    if not source:
+        reply = "What should I summarize — paste the text, or name one of your study files?"
+        _store_reply(db, user_key, reply)
+        return ChatOut(reply=reply)
+    try:
+        summary = study_mod.summarize(source)
+    except AriesLLMError as exc:
+        reply = f"I couldn't summarize that right now — {exc}"
+        _store_reply(db, user_key, reply)
+        return ChatOut(reply=reply)
+    _store_reply(db, user_key, summary)
+    return ChatOut(reply=summary)
+
+
 @app.post("/api/chat", response_model=ChatOut)
 def chat_endpoint(body: ChatIn, db: Session = Depends(get_db), user_key: str = Depends(current_key), user: User = Depends(get_current_user)):
     text = body.message.strip()
@@ -667,6 +860,27 @@ def chat_endpoint(body: ChatIn, db: Session = Depends(get_db), user_key: str = D
         db.add(Message(user_key=user_key, role="aries", content=reply))
         db.commit()
         return ChatOut(reply=reply, task_added=task_added)
+
+    # Study skill: quiz, Anki cards, summarize. Explicit commands,
+    # handled here — before memory learning and web search — and they
+    # return early, so a quiz answer is never learned as a fact and
+    # never sent to a web search.
+    quiz_start = _QUIZ_START_RE.search(text)
+    if quiz_start:
+        return _start_quiz(db, user_key, quiz_start.group(1))
+    active_quiz = study_mod.get_active_quiz(db, user_key)
+    if active_quiz:
+        if _QUIZ_STOP_RE.match(text.strip()):
+            return _stop_quiz(db, user_key, active_quiz)
+        return _answer_quiz(db, user_key, active_quiz, text)
+    if _QUIZ_STOP_RE.match(text.strip()):
+        reply = "No quiz is running right now."
+        _store_reply(db, user_key, reply)
+        return ChatOut(reply=reply)
+    if _ANKI_RE.search(text):
+        return _make_anki(db, user_key, text)
+    if _SUMMARIZE_RE.match(text.strip()):
+        return _summarize_chat(db, user_key, text)
 
     # Memory learning: explicit facts are held pending approval.
     pending_memory = None
@@ -780,6 +994,21 @@ def chat_endpoint(body: ChatIn, db: Session = Depends(get_db), user_key: str = D
         # invents an evasive reply instead of a plain one.
         account_name=user.username,
     )
+    # Teaching from the user's own material: the best-matching
+    # passages are quoted into the prompt, labelled as theirs. The
+    # teacher section of the prompt says how to use them — the
+    # material is the authority, and anything outside it is said
+    # plainly to be from general knowledge, never dressed up as
+    # coming from the material.
+    passages = study_mod.find_passages(db, user_key, text)
+    if passages:
+        quoted = "\n".join(
+            f"- From '{p['filename']}': {p['passage']}" for p in passages
+        )
+        system += (
+            "\nFrom the user's own study material (their slides, "
+            "handout or notes):\n" + quoted
+        )
     history = [
         {
             "role": m.role if m.role in ("user", "assistant") else "assistant",
@@ -969,6 +1198,278 @@ def download_memory_file(db: Session = Depends(get_db), user_key: str = Depends(
         media_type="text/markdown",
         filename="aries-memory.md",
     )
+
+
+# ---------------------------------------------------------------- study
+
+# The "great teacher" skill: the user's own study files, Anki cards,
+# quizzes, summaries, exam countdowns and audio lessons. Everything
+# is scoped to the signed-in account — a user only ever sees their
+# own files, cards, quizzes and exams. Files live under the server
+# data dir (data/study/), never in the repo.
+
+
+@app.get("/api/study")
+def study_state(db: Session = Depends(get_db), user_key: str = Depends(current_key)):
+    materials = (
+        db.query(StudyMaterial)
+        .filter_by(user_key=user_key)
+        .order_by(StudyMaterial.created_at.desc())
+        .all()
+    )
+    return {
+        "materials": [
+            {
+                "id": m.id,
+                "filename": m.filename,
+                "kind": m.kind,
+                "chars": len(m.text or ""),
+                "created_at": m.created_at.isoformat() if m.created_at else None,
+            }
+            for m in materials
+        ],
+        "exams": [
+            study_mod.exam_dict(e)
+            for e in db.query(ExamCountdown)
+            .filter_by(user_key=user_key)
+            .order_by(ExamCountdown.exam_date.asc())
+            .all()
+        ],
+        "sets": [
+            {
+                "id": s.id,
+                "name": s.name,
+                "card_count": s.card_count,
+                "created_at": s.created_at.isoformat() if s.created_at else None,
+            }
+            for s in db.query(StudySet)
+            .filter_by(user_key=user_key)
+            .order_by(StudySet.created_at.desc())
+            .all()
+        ],
+        "voice_configured": voice_mod.configured(),
+    }
+
+
+@app.post("/api/study/materials")
+async def upload_material(
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    user_key: str = Depends(current_key),
+):
+    """Upload a study file (slides, handout, notes). The text is
+    read out of it so Aries can teach from it in chat; the file
+    itself is kept under the server data dir."""
+    kind = study_mod.kind_for_filename(file.filename or "")
+    if kind not in ("pptx", "pdf", "txt", "md"):
+        raise HTTPException(400, "That file type isn't supported — send a .pptx, .pdf, .txt or .md file.")
+    data = await file.read()
+    if len(data) > study_mod.MAX_FILE_BYTES:
+        raise HTTPException(400, "That file is too big — keep it under 10 MB.")
+    try:
+        text = study_mod.extract_text(data, kind)
+    except Exception:
+        raise HTTPException(400, "I couldn't read that file. It may be damaged or in a format I can't open.") from None
+    stored = study_mod.save_material_file(user_key, file.filename or "material", data)
+    row = StudyMaterial(
+        user_key=user_key,
+        filename=file.filename or "material",
+        stored_name=stored,
+        kind=kind,
+        text=text or "",
+    )
+    db.add(row)
+    db.commit()
+    warning = ""
+    if not (text or "").strip():
+        warning = (
+            "I saved the file, but I couldn't read any text from it — "
+            "it may be picture-only pages. I can't teach from it until "
+            "there's readable text in it."
+        )
+    return {
+        "ok": True,
+        "id": row.id,
+        "filename": row.filename,
+        "kind": kind,
+        "chars": len(text or ""),
+        "warning": warning,
+    }
+
+
+@app.delete("/api/study/materials/{material_id}")
+def delete_material(material_id: int, db: Session = Depends(get_db), user_key: str = Depends(current_key)):
+    row = db.query(StudyMaterial).filter_by(id=material_id, user_key=user_key).first()
+    if not row:
+        raise HTTPException(404, "No such file.")
+    study_mod.delete_material_file(user_key, row.stored_name)
+    db.delete(row)
+    db.commit()
+    return {"ok": True}
+
+
+class AnkiIn(BaseModel):
+    material_id: int | None = None
+    topic: str = ""
+
+
+@app.post("/api/study/anki")
+def make_anki_cards(body: AnkiIn, db: Session = Depends(get_db), user_key: str = Depends(current_key)):
+    """Make Anki cards from a study file or a topic. One fact per
+    card, served as a .tsv for AnkiDroid import."""
+    mat = None
+    if body.material_id:
+        mat = db.query(StudyMaterial).filter_by(id=body.material_id, user_key=user_key).first()
+        if not mat:
+            raise HTTPException(404, "No such file.")
+    topic = (body.topic or "").strip()
+    if mat and not topic:
+        topic = mat.filename or "your material"
+    if not mat and topic:
+        mat = study_mod.match_material(db, user_key, topic)
+    if not mat and not topic:
+        raise HTTPException(400, "Pick a file or give a topic.")
+    try:
+        cards = study_mod.generate_anki(mat.text if mat else "", topic or "general knowledge")
+    except AriesLLMError as exc:
+        raise HTTPException(502, str(exc)) from exc
+    if not cards:
+        raise HTTPException(400, "I couldn't find any clear facts to turn into cards there.")
+    tsv = study_mod.anki_tsv(cards)
+    stored, _path = study_mod.save_anki_set(user_key, topic, tsv)
+    row = StudySet(user_key=user_key, name=topic, filename=stored, card_count=len(cards))
+    db.add(row)
+    db.commit()
+    return {
+        "ok": True,
+        "id": row.id,
+        "name": topic,
+        "card_count": len(cards),
+        "download_url": f"/api/study/anki/{row.id}",
+        "from_material": bool(mat),
+    }
+
+
+@app.get("/api/study/anki/{set_id}")
+def download_anki(set_id: int, db: Session = Depends(get_db), user_key: str = Depends(current_key)):
+    row = db.query(StudySet).filter_by(id=set_id, user_key=user_key).first()
+    if not row:
+        raise HTTPException(404, "No such card set.")
+    path = study_mod.anki_set_path(user_key, row.filename)
+    if not os.path.isfile(path):
+        raise HTTPException(404, "That card file is no longer on the server — make the cards again.")
+    return FileResponse(
+        path,
+        media_type="text/tab-separated-values",
+        filename=f"anki-{row.name or 'cards'}.tsv",
+    )
+
+
+@app.delete("/api/study/sets/{set_id}")
+def delete_anki_set(set_id: int, db: Session = Depends(get_db), user_key: str = Depends(current_key)):
+    row = db.query(StudySet).filter_by(id=set_id, user_key=user_key).first()
+    if not row:
+        raise HTTPException(404, "No such card set.")
+    path = study_mod.anki_set_path(user_key, row.filename)
+    try:
+        os.remove(path)
+    except OSError:
+        pass
+    db.delete(row)
+    db.commit()
+    return {"ok": True}
+
+
+class SummarizeIn(BaseModel):
+    material_id: int | None = None
+    text: str = ""
+
+
+@app.post("/api/study/summarize")
+def summarize_study(body: SummarizeIn, db: Session = Depends(get_db), user_key: str = Depends(current_key)):
+    """A short summary of a study file or pasted text — key points
+    only, in plain words."""
+    source = ""
+    if body.material_id:
+        mat = db.query(StudyMaterial).filter_by(id=body.material_id, user_key=user_key).first()
+        if not mat:
+            raise HTTPException(404, "No such file.")
+        source = mat.text or ""
+    elif body.text and body.text.strip():
+        source = body.text.strip()
+    if not source.strip():
+        raise HTTPException(400, "Nothing to summarize — pick a file or paste some text.")
+    try:
+        summary = study_mod.summarize(source)
+    except AriesLLMError as exc:
+        raise HTTPException(502, str(exc)) from exc
+    return {"ok": True, "summary": summary}
+
+
+class ExamIn(BaseModel):
+    name: str
+    subject: str = ""
+    exam_date: str  # YYYY-MM-DD
+
+
+@app.post("/api/study/exams")
+def add_exam(body: ExamIn, db: Session = Depends(get_db), user_key: str = Depends(current_key)):
+    name = (body.name or "").strip()
+    if not name:
+        raise HTTPException(400, "Give the exam a name.")
+    try:
+        exam_date = datetime.strptime(body.exam_date, "%Y-%m-%d")
+    except (ValueError, TypeError):
+        raise HTTPException(400, "Give the date as year-month-day, e.g. 2027-01-15.") from None
+    row = ExamCountdown(
+        user_key=user_key,
+        name=name[:256],
+        subject=(body.subject or "")[:128],
+        exam_date=exam_date,
+    )
+    db.add(row)
+    db.commit()
+    return {"ok": True, "exam": study_mod.exam_dict(row)}
+
+
+@app.delete("/api/study/exams/{exam_id}")
+def delete_exam(exam_id: int, db: Session = Depends(get_db), user_key: str = Depends(current_key)):
+    row = db.query(ExamCountdown).filter_by(id=exam_id, user_key=user_key).first()
+    if not row:
+        raise HTTPException(404, "No such exam.")
+    db.delete(row)
+    db.commit()
+    return {"ok": True}
+
+
+class StudyAudioIn(BaseModel):
+    text: str
+    voice_id: str | None = None
+
+
+@app.post("/api/study/audio")
+def study_audio(body: StudyAudioIn, user: User = Depends(get_current_user)):
+    """Speak a lesson or summary aloud, as a downloadable MP3. Uses
+    the same narrator voice as talk-back. The text is capped, so one
+    request cannot eat the whole free voice quota in a single call.
+    Without a voice key this answers plainly instead of failing
+    silently."""
+    text = (body.text or "").strip()
+    if not text:
+        raise HTTPException(400, "Nothing to speak.")
+    if len(text) > study_mod.MAX_AUDIO_CHARS:
+        text = text[: study_mod.MAX_AUDIO_CHARS]
+    try:
+        audio = voice_mod.synthesize(text, body.voice_id)
+    except voice_mod.VoiceNotConfigured:
+        raise HTTPException(
+            503,
+            "The narrator voice isn't set up yet, so I can't make the audio. "
+            "Talk-back on this device still works with its own voices.",
+        ) from None
+    except voice_mod.VoiceError as exc:
+        raise HTTPException(502, str(exc)) from exc
+    return Response(content=audio, media_type="audio/mpeg")
 
 
 # ---------------------------------------------------------------- tasks

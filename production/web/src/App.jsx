@@ -516,7 +516,7 @@ export default function App() {
       setStatus(res.searched ? "READY" : "SPEAKING");
       setMessages((m) => [
         ...m,
-        { role: "aries", content: res.reply, sources: res.sources || [] },
+        { role: "aries", content: res.reply, sources: res.sources || [], download: res.download || null },
       ]);
       if (res.pending_memory && !res.pending_memory.saved) {
         setNotice(`Aries learned: "${res.pending_memory.text}" — approve it in Memory.`);
@@ -972,6 +972,21 @@ function LatestReply({ message, typed }) {
         {!typed.done && <span className="type-caret">▍</span>}
       </p>
       {typed.done && message.sources?.length > 0 && <Sources sources={message.sources} />}
+      {typed.done && message.download && (
+        <button
+          className="pill"
+          type="button"
+          onClick={async () => {
+            try {
+              await api.downloadFile(message.download.url, "anki-cards.tsv");
+            } catch (e) {
+              alert(e.message);
+            }
+          }}
+        >
+          {message.download.label}
+        </button>
+      )}
     </div>
   );
 }
@@ -1460,6 +1475,213 @@ function AdminPanel() {
   );
 }
 
+// Study (Settings → Study): the "great teacher" skill. The user's
+// own slides, handouts and notes — Aries teaches from these first.
+// From here they can upload a file, make Anki cards from it, get a
+// summary, keep an exam countdown, and listen to a lesson. Everything
+// here is the signed-in account's own; nothing is shared.
+function StudySection() {
+  const [study, setStudy] = useState(null);
+  const [msg, setMsg] = useState("");
+  const [topic, setTopic] = useState("");
+  const [summary, setSummary] = useState("");
+  const [summaryFor, setSummaryFor] = useState("");
+  const [lastSet, setLastSet] = useState(null);
+  const [examName, setExamName] = useState("");
+  const [examSubject, setExamSubject] = useState("");
+  const [examDate, setExamDate] = useState("");
+  const [listenText, setListenText] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const loadStudy = useCallback(async () => {
+    try {
+      setStudy(await api.study());
+    } catch (e) {
+      setMsg(e.message || "Could not load your study files.");
+    }
+  }, []);
+  useEffect(() => { loadStudy(); }, [loadStudy]);
+
+  async function upload(f) {
+    if (!f) return;
+    setBusy(true);
+    setMsg("");
+    try {
+      const res = await api.uploadMaterial(f);
+      setMsg(res.warning || `Added “${res.filename}” — Aries can teach from it now.`);
+      await loadStudy();
+    } catch (e) {
+      setMsg(e.message || "Upload failed.");
+    }
+    setBusy(false);
+  }
+  async function makeCards(materialId, topicText) {
+    setBusy(true);
+    setMsg("");
+    try {
+      const res = await api.makeAnki(materialId, topicText);
+      setLastSet(res);
+      setMsg(
+        `Made ${res.card_count} cards on ${res.name}${res.from_material ? "" : " (from what Aries knows — upload your slides on it and the cards will come from those next time)"}.`
+      );
+      await loadStudy();
+    } catch (e) {
+      setMsg(e.message || "Could not make the cards.");
+    }
+    setBusy(false);
+  }
+  async function summarize(materialId, label) {
+    setBusy(true);
+    setMsg("");
+    try {
+      const res = await api.summarizeMaterial(materialId, "");
+      setSummary(res.summary);
+      setSummaryFor(label);
+    } catch (e) {
+      setMsg(e.message || "Could not summarize that.");
+    }
+    setBusy(false);
+  }
+  async function addExam() {
+    if (!examName.trim() || !examDate) {
+      setMsg("Give the exam a name and a date.");
+      return;
+    }
+    setBusy(true);
+    setMsg("");
+    try {
+      await api.addExam({ name: examName.trim(), subject: examSubject.trim(), exam_date: examDate });
+      setExamName("");
+      setExamSubject("");
+      setExamDate("");
+      setMsg("Exam added.");
+      await loadStudy();
+    } catch (e) {
+      setMsg(e.message || "Could not add the exam.");
+    }
+    setBusy(false);
+  }
+
+  const materials = study?.materials || [];
+  const exams = study?.exams || [];
+  const sets = study?.sets || [];
+  return (
+    <section>
+      <h3>Study</h3>
+      <p className="fine">Your slides, handouts and notes. Aries teaches from these first — upload a file, then ask about it in chat. In chat you can also say “quiz me on …”, “make Anki cards on …” or “summarize …”. Aries never quizzes you unless you ask.</p>
+      {msg && <p className="notice">{msg}</p>}
+
+      <h3>Your study files</h3>
+      <div className="mem-add">
+        <label className="fine">Upload slides, a handout or notes (.pptx, .pdf, .txt, .md):</label>
+        <input type="file" accept=".pptx,.pdf,.txt,.md" disabled={busy} onChange={(e) => {
+          const f = e.target.files && e.target.files[0];
+          e.target.value = "";
+          upload(f);
+        }} />
+      </div>
+      {materials.length === 0 && <p className="fine">No files yet.</p>}
+      <ul className="mem-list">
+        {materials.map((m) => (
+          <li key={m.id}>
+            <span><strong>{m.filename}</strong>{m.chars ? ` · ${m.chars} characters read` : " · no readable text yet"}</span>
+            <span className="mem-actions">
+              <button disabled={busy} onClick={() => makeCards(m.id, "")}>Make cards</button>
+              <button disabled={busy} onClick={() => summarize(m.id, m.filename)}>Summarize</button>
+              <button disabled={busy} onClick={async () => { if (confirm(`Remove ${m.filename}?`)) { await api.deleteMaterial(m.id).catch((e) => setMsg(e.message)); await loadStudy(); } }}>Remove</button>
+            </span>
+          </li>
+        ))}
+      </ul>
+      {summary && (
+        <div className="shot-desc">
+          <p><strong>Summary — {summaryFor}</strong></p>
+          <p style={{ whiteSpace: "pre-wrap" }}>{summary}</p>
+          <button onClick={() => { setListenText(summary); setMsg("Summary copied to the listen box below."); }}>Listen to this</button>
+        </div>
+      )}
+
+      <h3>Anki cards</h3>
+      <div className="mem-add">
+        <input value={topic} onChange={(e) => setTopic(e.target.value)} placeholder="A topic — e.g. cell structure" />
+        <button disabled={busy} onClick={() => { if (topic.trim()) makeCards(null, topic.trim()); }}>Make cards on this topic</button>
+      </div>
+      <p className="fine">One fact per card. Download the file and import it in AnkiDroid (Import → tab-separated, Basic). Your cards are listed below.</p>
+      {lastSet && (
+        <p>
+          <button onClick={async () => {
+            try { await api.downloadFile(lastSet.download_url, "anki-cards.tsv"); }
+            catch (e) { setMsg(e.message); }
+          }}>
+            Download {lastSet.card_count} cards (.tsv)
+          </button>
+        </p>
+      )}
+      {sets.length > 0 && (
+        <ul className="mem-list">
+          {sets.map((s) => (
+            <li key={s.id}>
+              <span><strong>{s.name}</strong> · {s.card_count} cards</span>
+              <span className="mem-actions">
+                <button onClick={async () => {
+                  try { await api.downloadFile(`/api/study/anki/${s.id}`, "anki-cards.tsv"); }
+                  catch (e) { setMsg(e.message); }
+                }}>Download</button>
+                <button onClick={async () => { if (confirm(`Delete the ${s.name} cards?`)) { await api.deleteAnkiSet(s.id).catch((e) => setMsg(e.message)); await loadStudy(); } }}>Delete</button>
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      <h3>Exam countdown</h3>
+      <div className="mem-add">
+        <input value={examName} onChange={(e) => setExamName(e.target.value)} placeholder="Exam name — e.g. Anatomy paper 1" />
+        <input value={examSubject} onChange={(e) => setExamSubject(e.target.value)} placeholder="Subject (optional)" />
+        <input type="date" value={examDate} onChange={(e) => setExamDate(e.target.value)} />
+        <button disabled={busy} onClick={addExam}>Add exam</button>
+      </div>
+      {exams.length === 0 && <p className="fine">No exams counted down yet.</p>}
+      <ul className="mem-list">
+        {exams.map((x) => (
+          <li key={x.id}>
+            <span><strong>{x.name}</strong>{x.subject ? ` — ${x.subject}` : ""} · {x.exam_date} · {x.days_left === 0 ? "today!" : x.days_left === 1 ? "1 day left" : x.days_left > 1 ? `${x.days_left} days left` : `${-x.days_left} days ago`}</span>
+            <span className="mem-actions">
+              <button onClick={async () => { if (confirm(`Remove ${x.name}?`)) { await api.deleteExam(x.id).catch((e) => setMsg(e.message)); await loadStudy(); } }}>Remove</button>
+            </span>
+          </li>
+        ))}
+      </ul>
+
+      <h3>Listen</h3>
+      <p className="fine">Paste a lesson or summary and hear it read aloud — same narrator voice as talk-back. Download keeps it as an MP3 you can listen to on the go (up to about 4,000 characters at a time).</p>
+      {!study?.voice_configured && <p className="fine">The narrator voice isn't set up yet — Listen uses your device's own voice for now, and the MP3 download needs the narrator voice.</p>}
+      <textarea value={listenText} onChange={(e) => setListenText(e.target.value)} placeholder="Paste a lesson or summary here…" rows={5} />
+      <button disabled={busy} onClick={() => { if (listenText.trim()) speak(listenText.trim(), true, (m) => setMsg(m)); }}>Listen</button>
+      <button disabled={busy} onClick={async () => {
+        if (!listenText.trim()) { setMsg("Type or paste the lesson first."); return; }
+        setBusy(true);
+        setMsg("");
+        try {
+          const blob = await api.studyAudio(listenText.trim());
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          a.href = url;
+          a.download = "aries-lesson.mp3";
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+          URL.revokeObjectURL(url);
+          setMsg("Audio downloaded.");
+        } catch (e) {
+          setMsg(e.message || "Could not make the audio.");
+        }
+        setBusy(false);
+      }}>Download audio (.mp3)</button>
+    </section>
+  );
+}
+
 // Report an issue (Settings → More): anyone can tell the admin
 // something is wrong, in plain words. The engine, app version and
 // screen are attached automatically — nobody has to type them.
@@ -1742,7 +1964,7 @@ function MoreSheet({ data, user, onLogout, tab, setTab, onClose, useSearch, setU
     } catch (e) { setMsg(e.message); }
   }
 
-  const tabs = ["aries", "memory", "more", "connections"];
+  const tabs = ["aries", "memory", "study", "more", "connections"];
   return (
     <div className="more-sheet" role="dialog" aria-label="Settings and more">
       <div className="more-head">
@@ -1883,6 +2105,8 @@ function MoreSheet({ data, user, onLogout, tab, setTab, onClose, useSearch, setU
           </div>
         </section>
       )}
+
+      {tab === "study" && <StudySection />}
 
       {tab === "more" && (
         <>

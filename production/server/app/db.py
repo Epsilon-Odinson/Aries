@@ -144,6 +144,75 @@ class Permission(Base):
     updated_at = Column(DateTime, default=datetime.utcnow)
 
 
+class StudyMaterial(Base):
+    """One study file a user uploaded (slides, handout, notes).
+
+    The original file is kept under data/study/<user_key>/ (same
+    pattern as face crops); the extracted plain text lives here in
+    the database, so teaching from it still works even though the
+    server disk is ephemeral. Only the signed-in account ever sees
+    its own rows.
+    """
+
+    __tablename__ = "study_materials"
+    id = Column(Integer, primary_key=True)
+    user_key = Column(String(64), nullable=False, default="default")
+    filename = Column(String(256), default="")  # name the user uploaded
+    stored_name = Column(String(256), default="")  # file on disk, if kept
+    kind = Column(String(16), default="")  # pptx | pdf | txt | md
+    text = Column(Text, default="")  # extracted plain text
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class StudySet(Base):
+    """A set of Anki cards Aries made for a user (a downloadable .tsv).
+
+    The file lives under data/study/sets/<user_key>/; the row is the
+    record of it, so the Study tab can list downloads per account.
+    """
+
+    __tablename__ = "study_sets"
+    id = Column(Integer, primary_key=True)
+    user_key = Column(String(64), nullable=False, default="default")
+    name = Column(String(256), default="")  # e.g. "Cell structure"
+    filename = Column(String(256), default="")  # file on disk
+    card_count = Column(Integer, default=0)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class ExamCountdown(Base):
+    """An exam a user is counting down to. Days left is computed
+    from exam_date at read time, so nothing ever goes stale."""
+
+    __tablename__ = "exam_countdowns"
+    id = Column(Integer, primary_key=True)
+    user_key = Column(String(64), nullable=False, default="default")
+    name = Column(String(256), default="")  # e.g. "Anatomy paper 1"
+    subject = Column(String(128), default="")
+    exam_date = Column(DateTime, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class QuizSession(Base):
+    """One quiz in progress for a user. Only ever started when the
+    user asks to be quizzed — never on its own. ``current_answer``
+    is the expected answer to ``current_question`` (kept here, never
+    shown to the user); ``score``/``total`` are the running tally."""
+
+    __tablename__ = "quiz_sessions"
+    id = Column(Integer, primary_key=True)
+    user_key = Column(String(64), nullable=False, default="default")
+    topic = Column(String(256), default="")
+    material_id = Column(Integer, nullable=True)
+    score = Column(Integer, default=0)
+    total = Column(Integer, default=0)
+    current_question = Column(Text, default="")
+    current_answer = Column(Text, default="")
+    active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow)
+
+
 class IssueReport(Base):
     """A problem a user reported to the admin, from inside the app.
 

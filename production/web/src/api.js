@@ -262,6 +262,65 @@ export const api = {
     a.remove();
     URL.revokeObjectURL(url);
   },
+  // Study skill (Settings → Study): the user's own files, Anki
+  // cards, summaries, exam countdowns and audio lessons. All scoped
+  // to the signed-in account by the server.
+  study: () => call("/api/study"),
+  uploadMaterial: (file) => {
+    const form = new FormData();
+    form.append("file", file);
+    return api.upload("/api/study/materials", form);
+  },
+  deleteMaterial: (id) =>
+    call(`/api/study/materials/${id}`, { method: "DELETE" }),
+  makeAnki: (materialId, topic) =>
+    call("/api/study/anki", {
+      method: "POST",
+      body: JSON.stringify({ material_id: materialId || null, topic: topic || "" }),
+    }),
+  deleteAnkiSet: (id) => call(`/api/study/sets/${id}`, { method: "DELETE" }),
+  summarizeMaterial: (materialId, text) =>
+    call("/api/study/summarize", {
+      method: "POST",
+      body: JSON.stringify({ material_id: materialId || null, text: text || "" }),
+    }),
+  addExam: (exam) =>
+    call("/api/study/exams", { method: "POST", body: JSON.stringify(exam) }),
+  deleteExam: (id) => call(`/api/study/exams/${id}`, { method: "DELETE" }),
+  // A file download with the session token (the server only serves
+  // the signed-in account's own files).
+  downloadFile: async (path, filename) => {
+    const res = await fetch(`${apiBase()}${path}`, { headers: { ...authHeaders() } });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.detail || `Download failed (${res.status})`);
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  },
+  // An audio lesson as an MP3, from the narrator voice. 503 when the
+  // voice key is not set — the caller says so plainly.
+  studyAudio: async (text, voiceId) => {
+    const res = await fetch(`${apiBase()}/api/study/audio`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...authHeaders() },
+      body: JSON.stringify({ text, voice_id: voiceId || undefined }),
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      const err = new Error(data.detail || `Audio failed (${res.status})`);
+      err.status = res.status;
+      throw err;
+    }
+    return res.blob();
+  },
   addTask: (task) => call("/api/tasks", { method: "POST", body: JSON.stringify(task) }),
   toggleTask: (id) => call(`/api/tasks/${id}/done`, { method: "POST" }),
   deleteTask: (id) => call(`/api/tasks/${id}`, { method: "DELETE" }),
