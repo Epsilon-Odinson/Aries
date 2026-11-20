@@ -505,14 +505,34 @@ def _learnable_fact(text: str) -> str | None:
 _GREETING_BARE = {
     "hi", "hey", "hello", "yo", "sup", "hiya", "howdy",
     "good morning", "good afternoon", "good evening", "good day",
-    "hey aries", "hi aries", "hello aries",
+    "hey aries", "hi aries", "hello aries", "yo aries",
     "hey how are you", "hi how are you", "hello how are you",
     "hey whats up", "hi whats up", "how are you", "whats up",
+    # Informal greetings — the way people actually talk to Aries.
+    "bro", "bruh", "broo", "heyy", "heyyy", "hii", "helloo", "heyya",
+    "hey bro", "hi bro", "yo bro", "wassup", "wassup bro",
+    "whats good", "whats good bro", "what up", "what up bro",
+    "bro whats up", "yo bro whats up", "hey bro whats up",
+    "hey there", "hello there",
+    "hey bro how are you", "hi bro how are you",
+    "wassup aries", "whats good aries",
 }
 _CHITCHAT = {
     "thanks", "thank you", "thank u", "ok", "okay", "lol", "lmao",
     "yes", "no", "yeah", "yep", "nah", "bye", "goodbye",
     "good night", "goodnight", "cool", "nice", "great", "perfect",
+}
+# Words a message can be made of and still only be a greeting or an
+# address — never a topic. The short-message fallback below exempts a
+# 1–2 word message built only from these, whatever the slang ("yo
+# fam", "sup boss"). Topic words (anatomy, biochemistry, signal, gt,
+# pro, ...) are deliberately NOT in here, so a short topic query
+# still searches.
+_GREETING_WORDS = {
+    "hi", "hey", "hello", "yo", "sup", "wassup", "hiya", "howdy",
+    "whats", "what", "up", "good", "morning", "afternoon", "evening",
+    "day", "there", "bro", "bruh", "broo", "fam", "mate", "pal",
+    "boss", "chief", "aries", "heyy", "hii", "helloo", "heyya",
 }
 _CREATIVE_RE = re.compile(
     r"\b(write|tell|compose|invent|make up)\b.{0,50}\b"
@@ -561,7 +581,23 @@ def _is_search_exempt(text: str) -> bool:
     live-info trigger. A small, explicit check — no LLM call."""
     stripped = (text or "").strip()
     bare = re.sub(r"\s+", " ", re.sub(r"[^a-z ]", "", stripped.lower())).strip()
+    # Stretched letters ("brooo", "heyyy", "yooo") are the same greeting.
+    bare = re.sub(r"(.)\1{2,}", r"\1", bare)
     if bare in _GREETING_BARE or bare in _CHITCHAT:
+        return True
+    # Short-message fallback: a 1–2 word message made only of
+    # greeting/address words, with no question mark, no question
+    # start and no live trigger, is chitchat — even if the exact
+    # slang is new. A topic word breaks the rule, so "Anatomy",
+    # "Signal 50" or "GT 50 Pro" still search.
+    words = bare.split()
+    if (
+        1 <= len(words) <= 2
+        and not stripped.endswith("?")
+        and not _QUESTION_START_RE.match(stripped)
+        and not _LIVE_TRIGGER_RE.search(stripped)
+        and all(w in _GREETING_WORDS for w in words)
+    ):
         return True
     if stripped.lower().startswith("remember "):
         return True
@@ -669,12 +705,31 @@ def chat_endpoint(body: ChatIn, db: Session = Depends(get_db), user_key: str = D
             searched = True
         except Exception:
             sources = []
-            search_context = (
-                "(Live web search failed, so I could not check current "
-                "information. Answer from what I already know, and say "
-                "plainly at the start that I could not check live info, "
-                "so this may be out of date.)"
-            )
+            # The disclaimer only leads the reply when this turn
+            # genuinely needed current information — a question, or
+            # a live trigger like a price or "today". Any other
+            # turn gets a conditional note instead, so a greeting
+            # that ever slips past the exemption can never open
+            # with "I could not check live info".
+            if (
+                text.endswith("?")
+                or _QUESTION_START_RE.match(text)
+                or _LIVE_TRIGGER_RE.search(text)
+            ):
+                search_context = (
+                    "(Live web search failed, so I could not check current "
+                    "information. Answer from what I already know, and say "
+                    "plainly at the start that I could not check live info, "
+                    "so this may be out of date.)"
+                )
+            else:
+                search_context = (
+                    "(Live web search failed, so I could not check current "
+                    "information. Answer from what I already know, and if "
+                    "any part of the answer depends on current "
+                    "information, say plainly that I could not check live "
+                    "info.)"
+                )
         if sources:
             lines = [
                 f"- {s['title']} ({s['publisher']}): {s['snippet']} [{s['url']}]"
