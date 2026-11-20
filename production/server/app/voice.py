@@ -22,7 +22,7 @@ API_BASE = "https://api.elevenlabs.io/v1"
 # Adam — premade masculine narrator voice.
 DEFAULT_VOICE_ID = "pNInz6obpgDQGcFmaJgB"
 DEFAULT_VOICE_NAME = "Adam"
-MODEL_ID = "eleven_multilingual_v2"
+MODEL_ID = "eleven_turbo_v2_5"
 TIMEOUT = 60
 # One reply is trimmed to this many characters so a long answer does
 # not eat a big slice of the free-tier quota in a single call.

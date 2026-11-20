@@ -37,31 +37,82 @@ function setSavedElevenVoiceId(id) {
 }
 
 let elevenAudio = null;
+let elevenGen = 0;
 function stopAllSpeech() {
   try { window.speechSynthesis.cancel(); } catch { /* ignore */ }
+  elevenGen++;
   if (elevenAudio) {
     try { elevenAudio.pause(); } catch { /* ignore */ }
     elevenAudio = null;
   }
 }
 
+// Split a reply into speakable chunks (sentences, merged so none is
+// tiny). The voice starts on the first chunk instead of waiting for
+// the whole reply to be synthesised, which is what made talk-back
+// feel slow.
+function splitSentences(text) {
+  const parts = (text || "")
+    .split(/(?<=[.!?])\s+|\n+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const chunks = [];
+  let buf = "";
+  for (const p of parts) {
+    if (buf && buf.length + p.length + 1 > 220) {
+      chunks.push(buf);
+      buf = p;
+    } else {
+      buf = buf ? buf + " " + p : p;
+    }
+  }
+  if (buf) chunks.push(buf);
+  return chunks.length ? chunks : [text];
+}
+
 // Returns true when ElevenLabs spoke the text, false when it is not
 // configured or the request failed (caller falls back to the browser).
+// Speaks chunk by chunk, fetching the next chunk while the current one
+// plays, so the first sentence is heard quickly and the rest follow
+// without a gap. A failed chunk is skipped, not fatal.
 async function speakEleven(text) {
   if (!elevenConfigured) return false;
-  try {
-    const blob = await api.tts(text, savedElevenVoiceId);
+  const chunks = splitSentences(text);
+  stopAllSpeech();
+  const gen = elevenGen;
+  let spokeAny = false;
+  let pending = api.tts(chunks[0], savedElevenVoiceId);
+  for (let i = 0; i < chunks.length; i++) {
+    if (gen !== elevenGen) return spokeAny;
+    let blob;
+    try {
+      blob = await pending;
+    } catch {
+      if (!spokeAny) return false;
+      pending = i + 1 < chunks.length ? api.tts(chunks[i + 1], savedElevenVoiceId) : null;
+      continue;
+    }
+    if (gen !== elevenGen) return spokeAny;
+    pending = i + 1 < chunks.length ? api.tts(chunks[i + 1], savedElevenVoiceId) : null;
     const url = URL.createObjectURL(blob);
-    stopAllSpeech();
     const a = new Audio(url);
     elevenAudio = a;
-    a.onended = () => {
-      URL.revokeObjectURL(url);
-      if (elevenAudio === a) elevenAudio = null;
-    };
-    await a.play();
-    return true;
-  } catch { return false; }
+    const ended = new Promise((resolve) => {
+      a.onended = () => {
+        URL.revokeObjectURL(url);
+        if (elevenAudio === a) elevenAudio = null;
+        resolve();
+      };
+      a.onerror = () => {
+        URL.revokeObjectURL(url);
+        resolve();
+      };
+    });
+    try { await a.play(); } catch { URL.revokeObjectURL(url); return spokeAny; }
+    spokeAny = true;
+    await ended;
+  }
+  return spokeAny;
 }
 
 let cachedVoices = [];
