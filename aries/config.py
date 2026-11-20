@@ -143,3 +143,77 @@ def has_api_key() -> bool:
     except RuntimeError:
         return False
     return True
+
+
+# ---------------------------------------------------------------------------
+# ElevenLabs voice key (talk-back). Same pattern as the NVIDIA key:
+# environment variable first, then the OS credential store. Optional —
+# without it the app falls back to the device's built-in voices.
+# ---------------------------------------------------------------------------
+
+ELEVENLABS_KEYRING_USERNAME = "elevenlabs_api_key"
+
+
+def get_elevenlabs_key() -> str:
+    """Return the ElevenLabs API key, or raise RuntimeError."""
+    key = os.getenv("ELEVENLABS_API_KEY")
+    if key:
+        return key.strip()
+    try:
+        import keyring
+    except ImportError:
+        keyring = None
+    if keyring is not None:
+        try:
+            key = keyring.get_password(KEYRING_SERVICE, ELEVENLABS_KEYRING_USERNAME)
+        except Exception:
+            key = None
+        if key:
+            return key.strip()
+    raise RuntimeError(
+        "ELEVENLABS_API_KEY is not set.\n"
+        "Add it in Settings → More → Desktop (Voice key), or set it as a "
+        "Windows user environment variable.\n"
+        "Without it, talk-back uses the device's built-in voices."
+    )
+
+
+def set_elevenlabs_key(key: str) -> None:
+    """Save the ElevenLabs API key to the OS credential store.
+
+    The key is never printed or logged. Raises ValueError for an empty
+    key, RuntimeError when keyring is not available.
+    """
+    key = (key or "").strip()
+    if not key:
+        raise ValueError("The key is empty — paste a key first.")
+    try:
+        import keyring
+    except ImportError as exc:
+        raise RuntimeError(
+            "keyring is not installed, so the key cannot be saved. "
+            "Install it with: pip install -r requirements.txt"
+        ) from exc
+    try:
+        keyring.set_password(KEYRING_SERVICE, ELEVENLABS_KEYRING_USERNAME, key)
+    except Exception as exc:
+        raise RuntimeError(
+            "Could not save the key to the OS credential store: "
+            f"{exc}"
+        ) from exc
+
+
+def elevenlabs_key_source() -> str | None:
+    """Where the current ElevenLabs key comes from, without revealing it."""
+    if os.getenv("ELEVENLABS_API_KEY"):
+        return "environment variable"
+    try:
+        import keyring
+    except ImportError:
+        return None
+    try:
+        if keyring.get_password(KEYRING_SERVICE, ELEVENLABS_KEYRING_USERNAME):
+            return "saved in the OS credential store"
+    except Exception:
+        return None
+    return None

@@ -52,7 +52,15 @@ site in a window) — pixel-identical UI by construction — plus a
 local Python service (aries/service.py) on 127.0.0.1 for PC control,
 microphone and wake phrase. The PyQt UI (aries/ui.py) is legacy
 and no longer used by the shell.
+0.8.0 makes the PC app self-contained: the local service now runs the
+FULL production backend on the PC (chat, memory, tasks, voice, face,
+screenshot — the same FastAPI app the website runs), against a local
+SQLite database in ~/.aries, so the app works without the live
+website. The cloud is only a fallback when the local service is down
+or has no engine key. Accounts work locally too, with the same rule:
+Epsilon (username "Epsilon") is admin by username, and Kelfy gets her
+own login on that PC with her own chats, memories and tasks.
 """
 
-__version__ = "0.7.0"
+__version__ = "0.8.0"
 __all__ = ["__version__"]

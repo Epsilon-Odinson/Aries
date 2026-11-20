@@ -8,6 +8,27 @@ sensitive actions, and a mini mode — built one module at a time.
 
 **Greeting:** "Aries active. Ready to cook."
 
+**0.8.0: the desktop is now self-contained — the local service runs
+the FULL backend on the PC** (the same FastAPI app the website runs:
+chat, web search, memory, tasks, ElevenLabs voice, face login,
+screenshot description), against a local SQLite database in
+`~/.aries`, so the app works without the live website. The cloud is
+only a fallback when the local service is down or has no engine key.
+Accounts work locally too, with the same rule: Epsilon (username
+"Epsilon") is admin by username, and Kelfy gets her own login on
+that PC with her own chats, memories and tasks. The shell
+(`aries-shell/`, Electron) renders the SAME React code as the web,
+bundled locally into the installed app, never the live site in a
+window — pixel-identical to the web by construction: same veil (real
+WebGL), same pointer orb, same fonts, same Settings, same Sources
+button. A local Python service (`aries/service.py`, on 127.0.0.1)
+also gives the frontend the desktop-only powers: full PC control
+(25 actions, max 5 steps, confirmation before acting, twice for
+destructive), the microphone (capture in a helper subprocess, so a
+bad audio driver can never close the app), and the "Hey Aries" wake
+phrase. The PyQt UI (`aries/ui.py`) is legacy and no longer used by
+the shell.
+
 **0.7.0: the desktop is now an Electron shell around the SAME React
 code as the web** — bundled locally into the installed app, never
 the live site in a window. The shell (`aries-shell/`, Electron)

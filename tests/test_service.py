@@ -1,10 +1,14 @@
-"""Tests for the 0.7.0 local service (aries/service.py).
+"""Tests for the 0.8.0 local service (aries/service.py).
 
 The Electron shell talks to this service on 127.0.0.1 for the
 desktop-only powers: PC control, microphone, wake phrase. The
 service must never crash on a bad request, must report plain
 words (never raw JSON / tracebacks), and must isolate the mic so
 a bad audio driver can never kill the app.
+
+Since 0.8.0 the service is also the full backend (see
+tests/test_local_backend.py for the /api coverage); these tests
+cover the desktop-only routes and the plain-words contract.
 
 Run: python -m unittest tests.test_service -v
 """
@@ -45,18 +49,32 @@ def _call(base, method, path, body=None):
 class ServiceTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
+        # Isolated home: the service keeps its database and settings
+        # under ~/.aries — tests must never touch the real one.
+        import tempfile
+
+        cls._tmp_home = tempfile.TemporaryDirectory()
+        cls._old_home = os.environ.get("HOME")
+        os.environ["HOME"] = cls._tmp_home.name
         cls.server, cls.base = _start_server()
 
     @classmethod
     def tearDownClass(cls):
         cls.server.shutdown()
         cls.server.server_close()
+        if cls._old_home is None:
+            os.environ.pop("HOME", None)
+        else:
+            os.environ["HOME"] = cls._old_home
+        cls._tmp_home.cleanup()
 
     def test_health(self):
         status, data = _call(self.base, "GET", "/health")
         self.assertEqual(status, 200)
         self.assertTrue(data["ok"])
-        self.assertEqual(data["version"], "0.7.0")
+        self.assertEqual(data["version"], "0.8.0")
+        self.assertEqual(data["backend"], "local")
+        self.assertEqual(data["db"], "sqlite")
         self.assertIn("pc_enabled", data)
 
     def test_unknown_route_is_plain_404(self):
