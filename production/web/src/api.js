@@ -227,6 +227,12 @@ export const api = {
   approveMemory: (id) => call(`/api/memories/${id}/approve`, { method: "POST" }),
   pinMemory: (id) => call(`/api/memories/${id}/pin`, { method: "POST" }),
   deleteMemory: (id) => call(`/api/memories/${id}`, { method: "DELETE" }),
+  importMemories: (file) => {
+    const form = new FormData();
+    form.append("file", file);
+    form.append("consent", "true");
+    return api.upload("/api/memories/import", form);
+  },
   addTask: (task) => call("/api/tasks", { method: "POST", body: JSON.stringify(task) }),
   toggleTask: (id) => call(`/api/tasks/${id}/done`, { method: "POST" }),
   deleteTask: (id) => call(`/api/tasks/${id}`, { method: "DELETE" }),

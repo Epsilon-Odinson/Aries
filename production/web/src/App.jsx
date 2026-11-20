@@ -1662,6 +1662,22 @@ function MoreSheet({ data, user, onLogout, tab, setTab, onClose, useSearch, setU
             <input value={memText} onChange={(e) => setMemText(e.target.value)} placeholder="Teach Aries something…" />
             <button onClick={addMem}>Remember</button>
           </div>
+          <div className="mem-add">
+            <label className="fine">Import memories from a file:</label>
+            <input type="file" accept=".md,.txt" onChange={async (e) => {
+              const f = e.target.files && e.target.files[0];
+              if (!f) return;
+              if (!confirm("Import the memories in this file into your account? They stay in your account only.")) { e.target.value = ""; return; }
+              try {
+                const res = await api.importMemories(f);
+                setMsg(`Imported ${res.imported} memories into your account.`);
+              } catch (err) {
+                setMsg(`Import failed: ${err.message}`);
+              }
+              e.target.value = "";
+              onClose();
+            }} />
+          </div>
           <ul className="mem-list">
             {memories.map((m) => (
               <li key={m.id} className={m.pending ? "pending" : ""}>

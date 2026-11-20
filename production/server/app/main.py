@@ -705,6 +705,57 @@ def delete_memory(memory_id: int, db: Session = Depends(get_db), user_key: str =
     return {"ok": True}
 
 
+@app.post("/api/memories/import")
+async def import_memories(
+    file: UploadFile = File(...),
+    consent: bool = Form(False),
+    db: Session = Depends(get_db),
+    user_key: str = Depends(current_key),
+):
+    """Import memories from a Markdown file into the signed-in user's vault.
+
+    Format: "## Heading" lines set the category; "- " bullet lines under
+    them become one memory each. Everything else is skipped. The file
+    only ever lands in this account's vault — never shared, never in
+    the repo. Importing needs the user's explicit consent in the UI.
+    """
+    try:
+        require(db, user_key, "save_memory", consent=consent)
+    except PermissionDenied as exc:
+        raise HTTPException(403, str(exc)) from exc
+    raw = await file.read()
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        raise HTTPException(400, "That file is not readable text.") from None
+    category = "general"
+    imported = 0
+    skipped = 0
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if stripped.startswith("## "):
+            category = stripped[3:].strip() or "general"
+            continue
+        if stripped.startswith("#") or stripped.startswith("<!--"):
+            continue
+        if stripped.startswith("- "):
+            fact = stripped[2:].strip()
+            if not fact or len(fact) > 1000:
+                skipped += 1
+                continue
+            if imported >= 500:
+                skipped += 1
+                continue
+            db.add(Memory(user_key=user_key, text=fact, category=category))
+            imported += 1
+        else:
+            skipped += 1
+    db.commit()
+    return {"ok": True, "imported": imported, "skipped": skipped}
+
+
 # ---------------------------------------------------------------- tasks
 
 
