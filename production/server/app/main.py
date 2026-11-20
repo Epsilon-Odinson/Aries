@@ -293,8 +293,31 @@ def _memories(db: Session, user_key: str, include_pending: bool = False) -> list
     return q.order_by(Memory.pinned.desc(), Memory.created_at.desc()).all()
 
 
+# "What do you know about me" — the user asking for a summary of
+# what Aries knows about them. No keyword can match that question,
+# so recall hands over the newest memories instead (see
+# _recall_memories). Kept narrow on purpose: a topic question must
+# never pull the whole vault.
+_SELF_SUMMARY_RE = re.compile(
+    r"what (do you|d'you) (know|remember) about me"
+    r"|tell me about (me|myself)"
+    r"|who am i\b",
+    re.IGNORECASE,
+)
+
+
 def _recall_memories(db: Session, user_key: str, text: str, limit: int = 5) -> list[str]:
-    """Simple keyword recall: memories sharing a word with the message."""
+    """Simple keyword recall: memories sharing a word with the message.
+
+    Except when the user asks what Aries knows about them ("what do
+    you know about me", "tell me about me") — no keyword can match
+    that question, so keyword recall would return nothing and Aries
+    would claim to know nothing about a user with a full vault. For
+    those questions, hand over the newest memories instead (still
+    this account's only, still capped at ``limit``).
+    """
+    if _SELF_SUMMARY_RE.search(text or ""):
+        return [m.text for m in _memories(db, user_key)[:limit]]
     words = {w for w in re.findall(r"[a-z]{4,}", text.lower())}
     picked = []
     for mem in _memories(db, user_key):
@@ -615,7 +638,7 @@ def _is_search_exempt(text: str) -> bool:
 
 
 @app.post("/api/chat", response_model=ChatOut)
-def chat_endpoint(body: ChatIn, db: Session = Depends(get_db), user_key: str = Depends(current_key)):
+def chat_endpoint(body: ChatIn, db: Session = Depends(get_db), user_key: str = Depends(current_key), user: User = Depends(get_current_user)):
     text = body.message.strip()
     if not text:
         raise HTTPException(400, "Empty message")
@@ -752,6 +775,10 @@ def chat_endpoint(body: ChatIn, db: Session = Depends(get_db), user_key: str = D
         profile=_profile_dict(db, user_key),
         memories=_recall_memories(db, user_key, text),
         soul=person["soul"],
+        # The display name on the signed-in account ("Kelfy", "Epsilon").
+        # Without it the model has no name for a fresh account and
+        # invents an evasive reply instead of a plain one.
+        account_name=user.username,
     )
     history = [
         {

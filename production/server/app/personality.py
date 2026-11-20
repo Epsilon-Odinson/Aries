@@ -119,13 +119,15 @@ def build_system_prompt(
     profile: dict | None = None,
     memories: list[str] | None = None,
     soul: str | None = None,
+    account_name: str | None = None,
 ) -> str:
     """Build the system prompt for one chat turn.
 
     ``soul`` is the signed-in user's own character text. When it is
     set, it replaces the shared SOUL.md default as the character
     definition for that user only; when empty or missing, the shared
-    SOUL.md is used. Everything else — date, voice preset, sliders,
+    SOUL.md is used. ``account_name`` is the display name on the
+    signed-in user's account (e.g. "Kelfy"). Everything else — date, voice preset, sliders,
     notes, profile, MEMORY.md, vault memories — is unchanged.
     """
     parts = []
@@ -142,6 +144,15 @@ def build_system_prompt(
         + "You know the current date and time — never say you do not, "
         "and never ask the user what month or year it is."
     )
+    # The model is never told the signed-in user's name otherwise: the
+    # profile is empty for a fresh account, so without this line it
+    # cannot answer "what's my name" and invents an evasive reply.
+    if account_name and account_name.strip():
+        parts.append(
+            f"You are talking to {account_name.strip()} — that is the "
+            "name on their account. Use it naturally when it fits, the "
+            "way you would with a friend."
+        )
     own_soul = (soul or "").strip()
     if own_soul:
         parts.append(own_soul)
@@ -180,5 +191,40 @@ def build_system_prompt(
         "a conversation — just answer the user directly. Answer in the "
         "user's language. If you do not know something, say so — never "
         "invent facts, dates, prices, or sources."
+    )
+    # "What do you know about me / what's my name": answer only from
+    # what this prompt says about this person — their profile, the
+    # facts listed here, this conversation. Never anything about
+    # anyone else. With a fresh account nothing is listed yet: say so
+    # in one short plain line and ask what they'd like you to know.
+    # Never explain how remembering works, and never use internal
+    # words like vault, stored, database, user_key, account, or
+    # private.
+    parts.append(
+        "When the user asks what you know about them, or what their "
+        "name is, answer only from what is in this prompt about them — "
+        "their profile, the facts listed here, and this conversation. "
+        "Never use anything you know about anyone else. If nothing "
+        "about them is listed here yet, say so in one short plain "
+        "line, like \"I don't know much about you yet — you're new "
+        "here.\", and ask what they'd like you to know. Never explain "
+        "how you remember things: do not use words like vault, stored, "
+        "database, user_key, account, or private."
+    )
+    # Brevity: match the answer to the question. A greeting gets a
+    # greeting back, nothing more. A simple question gets a short
+    # answer. Only a question that asks for detail, teaching, or a
+    # full explanation earns a long answer — study questions and
+    # "explain / teach me" requests still get full answers.
+    parts.append(
+        "Match the length of your answer to the question. A greeting "
+        "gets a greeting back, nothing more. A simple question gets a "
+        "short answer — one or two sentences. Never pad with filler, "
+        "repetition, restating the question, or explanation nobody "
+        "asked for. If you do not know something, say so in one line "
+        "and stop. Only give a long answer when the question actually "
+        "asks for detail, teaching, or a full explanation — study "
+        "questions and 'explain' or 'teach me' requests still get "
+        "full answers."
     )
     return "\n".join(parts)
