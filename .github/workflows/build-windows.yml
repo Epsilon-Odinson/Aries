@@ -1,19 +1,21 @@
-# Build the Aries desktop app as a Windows .exe and a Windows installer,
-# and publish both as GitHub Release assets.
+# Build the Aries desktop app 0.7.0 (Electron shell + Python sidecar)
+# and publish the installer + portable app as GitHub Release assets.
 #
-# Trigger it by pushing a tag like v0.5.0-desktop, or by hand from the
-# Actions tab (workflow_dispatch). The .exe is a single file
-# (PyInstaller --onefile): download it, run it, no install needed.
-# The installer (Aries-Setup.exe, built with Inno Setup) installs Aries
-# to Program Files and offers a desktop shortcut and a taskbar pin.
-# No API key is needed on first run — 0.5.0 uses the server like the
-# website does, so it just works.
+# Trigger it by pushing a tag like v0.7.0-desktop, or by hand from the
+# Actions tab (workflow_dispatch). The installer (Aries-Setup.exe,
+# electron-builder NSIS) installs Aries, offers a desktop shortcut
+# and a taskbar pin. Aries.exe is the portable single file.
+# The shell renders the SAME React app as the web, bundled locally —
+# it never loads the live website. A local Python service on
+# 127.0.0.1 handles PC control, the microphone and the wake phrase.
+# No API key is needed on first run — chat uses the server like the
+# website does. PC actions need the NVIDIA engine key, added in
+# Settings → More → Desktop (saved to the Windows Credential Manager).
 #
 # The release step only runs for tag pushes. A manual dispatch just
-# builds and uploads the files as workflow artifacts, so a build can
-# be checked before it is released. The release step is idempotent:
-# if the release already exists it uploads the assets with --clobber
-# instead of failing.
+# builds and uploads the files as workflow artifacts. The release
+# step is idempotent: if the release already exists it uploads the
+# assets with --clobber instead of failing.
 
 name: Build Windows .exe
 
@@ -33,76 +35,74 @@ jobs:
       - name: Check out the repo
         uses: actions/checkout@v4
 
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
       - name: Set up Python 3.11
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
       - name: Check Python syntax
-        run: python -m compileall -q aries run_aries.py
+        run: python -m compileall -q aries
 
-      - name: Install dependencies
+      - name: Build the React app into the shell
+        shell: bash
+        run: bash aries-shell/build-web.sh
+
+      - name: Install the shell's dependencies
+        run: npm ci
+        working-directory: aries-shell
+
+      - name: Build the Python sidecar
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install pyinstaller
+          pyinstaller aries-shell/sidecar.spec
+          if (-not (Test-Path dist\aries-service.exe)) { exit 1 }
+          New-Item -ItemType Directory -Force -Path aries-shell\sidecar | Out-Null
+          Copy-Item dist\aries-service.exe aries-shell\sidecar\aries-service.exe
 
-      - name: Build the .exe
+      - name: Build the installer + portable app
+        run: npx electron-builder --win --x64
+        working-directory: aries-shell
+
+      - name: Check the artifacts exist
         run: |
-          pyinstaller --onefile --windowed --name Aries --clean `
-            --icon aries.ico `
-            --version-file version_info.txt `
-            --hidden-import keyring `
-            --hidden-import pyautogui `
-            --hidden-import psutil `
-            --hidden-import pyperclip `
-            --hidden-import speech_recognition `
-            --hidden-import pygame `
-            --hidden-import pyttsx3 `
-            --hidden-import pyaudio `
-            --hidden-import cv2 `
-            run_aries.py
-
-      - name: Check the .exe exists
-        run: |
-          if (-not (Test-Path dist\Aries.exe)) { exit 1 }
-          $size = (Get-Item dist\Aries.exe).Length / 1MB
-          Write-Host "Aries.exe built: $([math]::Round($size, 1)) MB"
-
-      - name: Install Inno Setup
-        run: choco install innosetup -y
-
-      - name: Build the installer
-        run: |
-          ISCC aries.iss
-          if (-not (Test-Path installer\Aries-Setup.exe)) { exit 1 }
-          $size = (Get-Item installer\Aries-Setup.exe).Length / 1MB
-          Write-Host "Aries-Setup.exe built: $([math]::Round($size, 1)) MB"
-
-      - name: Upload the .exe as a workflow artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: Aries-windows-exe
-          path: dist/Aries.exe
-          if-no-files-found: error
+          if (-not (Test-Path aries-shell\dist-installer\Aries-Setup.exe)) { exit 1 }
+          if (-not (Test-Path aries-shell\dist-installer\Aries.exe)) { exit 1 }
+          $i = (Get-Item aries-shell\dist-installer\Aries-Setup.exe).Length / 1MB
+          $p = (Get-Item aries-shell\dist-installer\Aries.exe).Length / 1MB
+          Write-Host "Aries-Setup.exe built: $([math]::Round($i, 1)) MB"
+          Write-Host "Aries.exe built: $([math]::Round($p, 1)) MB"
 
       - name: Upload the installer as a workflow artifact
         uses: actions/upload-artifact@v4
         with:
           name: Aries-windows-installer
-          path: installer/Aries-Setup.exe
+          path: aries-shell/dist-installer/Aries-Setup.exe
+          if-no-files-found: error
+
+      - name: Upload the portable app as a workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Aries-windows-exe
+          path: aries-shell/dist-installer/Aries.exe
           if-no-files-found: error
 
       - name: Publish GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
         run: |
           $tag = "${{ github.ref_name }}"
-          $notes = "Windows build of the Aries desktop app (0.5.0) — full web parity. Aries-Setup.exe is the installer — it installs Aries, offers a desktop shortcut and a taskbar pin. Aries.exe is the portable single file — download and run it, no install needed. No API key needed on first run — it uses the server like the website does. Voice chat, live web search, all Settings, the real veil background, Sources button, and voice-only mini mode are all in. PC control is off by default — turn it on in Settings if you want Aries to act on your PC."
+          $notes = "Windows build of the Aries desktop app (0.7.0) — the Electron shell. The same React app as the website, bundled locally into a real installed PC program (never the live site in a window), so the desktop is pixel-identical to the web: same veil, same pointer orb, same fonts, same Settings. Aries-Setup.exe is the installer — it installs Aries, offers a desktop shortcut and a taskbar pin. Aries.exe is the portable single file — download and run it, no install needed. No API key needed on first run — chat uses the server like the website does. PC control, the microphone and the wake phrase run through a local service on your PC. PC control is off by default — turn it on in Settings, and add the NVIDIA engine key there for PC actions. Mini mode: press the face to shrink to the floating face, press it again to come back to full size."
           gh release view $tag --json tagName -q .tagName 2>$null | Out-Null
           if ($LASTEXITCODE -eq 0) {
-            gh release upload $tag "dist/Aries.exe" "installer/Aries-Setup.exe" --clobber
+            gh release upload $tag "aries-shell/dist-installer/Aries.exe" "aries-shell/dist-installer/Aries-Setup.exe" --clobber
           } else {
-            gh release create $tag --title "Aries desktop $tag" --notes $notes "dist/Aries.exe" "installer/Aries-Setup.exe"
+            gh release create $tag --title "Aries desktop $tag" --notes $notes "aries-shell/dist-installer/Aries.exe" "aries-shell/dist-installer/Aries-Setup.exe"
           }
         env:
           GH_TOKEN: ${{ github.token }}
