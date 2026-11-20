@@ -1,7 +1,14 @@
 // Tiny fetch wrapper for the Aries backend.
 // In production the backend serves this app, so /api is relative.
 // In dev, VITE_API_URL can point at http://localhost:8000.
-const BASE = import.meta.env.VITE_API_URL || "";
+// In the desktop shell (Electron) the page is a LOCAL file, so there
+// is no relative /api — window.ariesDesktop (set by the shell's
+// preload) gives the cloud API address, and the local Python service
+// address for PC-only features.
+const DESK =
+  (typeof window !== "undefined" && window.ariesDesktop) || null;
+export const isDesktop = !!DESK;
+const BASE = DESK ? DESK.cloudApi : import.meta.env.VITE_API_URL || "";
 
 async function call(path, opts = {}) {
   const res = await fetch(`${BASE}${path}`, {
@@ -23,6 +30,76 @@ async function call(path, opts = {}) {
   }
   return data;
 }
+
+// Local service (desktop shell only): PC control, microphone, wake
+// phrase. These never run on the web — the functions throw a plain
+// error there so a desktop-only call can never silently do nothing.
+async function localCall(path, opts = {}) {
+  if (!DESK || !DESK.localApi) {
+    throw new Error("That only works in the desktop app.");
+  }
+  const res = await fetch(`${DESK.localApi}${path}`, {
+    headers: { "Content-Type": "application/json", ...(opts.headers || {}) },
+    ...opts,
+  });
+  const text = await res.text();
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    data = { ok: false, error: text };
+  }
+  if (!res.ok || data.ok === false) {
+    throw new Error(data.error || data.why || `Local service failed (${res.status})`);
+  }
+  return data;
+}
+
+export const local = {
+  // The sidecar may take a moment to start; health says if it is up.
+  health: () => localCall("/health"),
+  micAvailable: () => localCall("/mic/available"),
+  // One dictation. Returns {text} or {heard: false}; throws a plain
+  // error when the mic is unusable — the shell stays open either way.
+  listen: (timeout = 12) =>
+    localCall("/mic/listen", {
+      method: "POST",
+      body: JSON.stringify({ timeout }),
+    }),
+  wakeStart: () => localCall("/mic/wake/start", { method: "POST" }),
+  wakeStop: () => localCall("/mic/wake/stop", { method: "POST" }),
+  wakePoll: () => localCall("/mic/wake/poll"),
+  // PC flow: local NVIDIA LLM plans the steps; the app confirms them,
+  // then executes. Returns {is_pc, reply, steps, lines, destructive,
+  // needs_key, needs_pc}.
+  localChat: (message) =>
+    localCall("/local/chat", {
+      method: "POST",
+      body: JSON.stringify({ message }),
+    }),
+  pcDescribe: (steps) =>
+    localCall("/local/pc/describe", {
+      method: "POST",
+      body: JSON.stringify({ steps }),
+    }),
+  pcExecute: (steps) =>
+    localCall("/local/pc/execute", {
+      method: "POST",
+      body: JSON.stringify({ steps }),
+    }),
+  pcEnabled: () => localCall("/local/pc/enabled"),
+  setPcEnabled: (enabled) =>
+    localCall("/local/pc/enabled", {
+      method: "POST",
+      body: JSON.stringify({ enabled }),
+    }),
+  keyStatus: () => localCall("/local/key/status"),
+  saveKey: (key) =>
+    localCall("/local/key", {
+      method: "POST",
+      body: JSON.stringify({ key }),
+    }),
+};
 
 export const api = {
   health: () => call("/api/health"),

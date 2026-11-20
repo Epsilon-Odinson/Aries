@@ -63,6 +63,21 @@ button { min-height: 2.5rem; font-family: inherit; }
     linear-gradient(to bottom, rgba(8, 0, 11, 0.35), rgba(8, 0, 11, 0) 22%, rgba(8, 0, 11, 0) 74%, rgba(8, 0, 11, 0.5));
 }
 
+/* ---------- Made-by stamp ---------- */
+/* Small italic script stamp, bottom-left, never blocking the composer. */
+.made-by {
+  position: fixed;
+  left: 1rem;
+  bottom: 1rem;
+  z-index: 5;
+  font-family: "Segoe Script", "Brush Script MT", "Lucida Handwriting", cursive;
+  font-style: italic;
+  font-size: 0.85rem;
+  color: var(--cream-dim);
+  text-shadow: 0 1px 8px rgba(8, 0, 11, 0.9);
+  pointer-events: none;
+}
+
 /* ---------- Layout ---------- */
 .stage {
   position: fixed;
@@ -287,6 +302,28 @@ body.mini .greeting { opacity: 0; transform: translateY(10px); pointer-events: n
 body.mini .status { opacity: 0; }
 body.mini .stage { justify-content: flex-end; padding-bottom: 12.5rem; }
 
+/* ---------- Desktop shell mini window (face only, 200px) ---------- */
+/* In the desktop shell the WINDOW itself shrinks to 200px, so the
+   page must show nothing but the face: no composer, no greeting, no
+   reply, no stamp, no gear. The whole window drags by the face. */
+body.desktop-mini .visor { width: 150px; }
+body.desktop-mini .greeting,
+body.desktop-mini .status,
+body.desktop-mini .dock,
+body.desktop-mini .topline,
+body.desktop-mini .gear-btn,
+body.desktop-mini .made-by,
+body.desktop-mini .latest-reply,
+body.desktop-mini .latest-hint,
+body.desktop-mini .notice,
+body.desktop-mini .due-card { display: none !important; }
+body.desktop-mini .stage {
+  justify-content: center;
+  padding-bottom: 0;
+  -webkit-app-region: drag;
+}
+body.desktop-mini .face-btn { cursor: pointer; -webkit-app-region: drag; }
+
 @media (max-height: 480px) {
   .visor { width: 110px; }
   .greeting { margin-top: 0.9rem; }
@@ -446,6 +483,9 @@ body.mini .stage { justify-content: flex-end; padding-bottom: 12.5rem; }
   padding: 1.5rem; max-width: 480px; width: 100%; color: var(--cream);
 }
 .perm-actions, .wizard-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-top: 1rem; }
+/* PC plan list inside the confirmation dialog. */
+.pc-plan { margin: 0.75rem 0; padding-left: 1.25rem; }
+.pc-plan li { margin: 0.3rem 0; }
 .perm-card button, .wizard-card button, .wizard-card select, .wizard-card input {
   border: 1px solid var(--hairline); background: transparent; color: var(--cream);
   border-radius: 999px; padding: 0.55rem 0.9rem; cursor: pointer;

@@ -1,7 +1,27 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Veil from "./Veil.jsx";
 import Face from "./Face.jsx";
-import { api } from "./api.js";
+import { api, local, isDesktop } from "./api.js";
+
+// Desktop shell only: does a message look like a PC action (open an
+// app, type, click, shutdown, screenshot, ...)? Port of the Python
+// heuristic — those go to the local service (local NVIDIA LLM), since
+// the cloud backend does not do PC actions. Everything else goes to
+// the cloud chat as normal.
+const PC_PATTERNS = [
+  /\b(open|launch|start|run)\s+(file\s+explorer|explorer|notepad|calculator|paint|word|excel|powerpoint|chrome|edge|firefox|spotify|vlc|settings|control\s+panel|task\s+manager|cmd|command\s+prompt|terminal|powershell|the\s+(file|folder|app|application|program))\b/i,
+  /\b(open|close)\s+(a\s+|the\s+)?(file|folder|app|application|program|window)\b/i,
+  /\b(shutdown|restart|reboot|sleep|hibernate|log\s+off|lock\s+(the\s+|my\s+)?(pc|computer|screen))\b/i,
+  /\b(take\s+a\s+screenshot|screenshot)\b/i,
+  /\b(volume\s+(up|down)|mute|unmute|brightness\s+(up|down))\b/i,
+  /\b(type|click|press|move\s+the\s+mouse|scroll)\b/i,
+  /\b(delete|create|rename|move|copy)\s+(a\s+|the\s+)?(file|folder)\b/i,
+  /[A-Za-z]:\\[^\s]+|\.exe\b|\.txt\b/i,
+];
+function looksLikePcCommand(text) {
+  const t = (text || "").toLowerCase();
+  return PC_PATTERNS.some((p) => p.test(t));
+}
 
 const PERM_LABELS = {
   microphone: "Microphone",
@@ -238,6 +258,8 @@ export default function App() {
   const [locked, setLocked] = useState(false);
   const [setupOpen, setSetupOpen] = useState(false);
   const [notice, setNotice] = useState("");
+  // Desktop shell: a PC plan waiting for the user to confirm it.
+  const [pcPlan, setPcPlan] = useState(null);
   // ElevenLabs voices from the server (empty until the key is set).
   const [eleven, setEleven] = useState({ configured: false, voices: [], defaultVoiceId: null, defaultVoiceName: "" });
   // Grain toggle swaps which baked grain image the veil shows.
@@ -250,8 +272,14 @@ export default function App() {
   // Mini mode is the web front's body class: the visor shrinks, the
   // greeting and status fade out, and the stage moves to the bottom.
   // Pressing the face toggles it; Expand returns to full size.
+  // In the desktop shell the window itself also shrinks to the
+  // face-only mini window (and back), via the shell's IPC.
   useEffect(() => {
     document.body.classList.toggle("mini", mini);
+    document.body.classList.toggle("desktop-mini", mini && isDesktop);
+    if (isDesktop && window.ariesDesktop?.setMini) {
+      window.ariesDesktop.setMini(mini).catch(() => {});
+    }
     return () => document.body.classList.remove("mini");
   }, [mini]);
 
@@ -313,6 +341,57 @@ export default function App() {
     if (!msg) return;
     setInput("");
     setMessages((m) => [...m, { role: "user", content: msg }]);
+    // Desktop shell: PC actions go to the local service (local LLM
+    // plans the steps, the user confirms, then they run). Everything
+    // else goes to the cloud chat, exactly like the web.
+    if (isDesktop && looksLikePcCommand(msg)) {
+      setFaceState("thinking");
+      setStatus("THINKING");
+      let plan;
+      try {
+        plan = await local.localChat(msg);
+      } catch (e) {
+        setFaceState("error");
+        setStatus("ERROR");
+        setMessages((m) => [...m, { role: "aries", content: `Something went wrong: ${e.message}` }]);
+        return;
+      }
+      if (plan.needs_key) {
+        setFaceState("idle");
+        setStatus("READY");
+        setMessages((m) => [...m, { role: "aries", content: plan.reply }]);
+        setNotice("PC actions need the engine key — add it in Settings → More → Desktop.");
+        return;
+      }
+      if (plan.needs_pc) {
+        setFaceState("idle");
+        setStatus("READY");
+        setMessages((m) => [...m, { role: "aries", content: plan.reply }]);
+        return;
+      }
+      if (plan.is_pc && plan.steps?.length) {
+        // Show the plan and ask — nothing runs until the user says yes.
+        // Destructive plans (shutdown, restart, delete) get a second
+        // ask in the dialog itself.
+        setPcPlan({
+          msg,
+          lines: plan.lines || [],
+          steps: plan.steps,
+          destructive: !!plan.destructive,
+          warned: false,
+        });
+        setFaceState("idle");
+        setStatus("READY");
+        return;
+      }
+      // The local model answered in plain words — show it like a reply.
+      setFaceState("speaking");
+      setStatus("SPEAKING");
+      setMessages((m) => [...m, { role: "aries", content: plan.reply || "Hey." }]);
+      speak(plan.reply || "Hey.", talkBack);
+      setTimeout(() => { setFaceState("idle"); setStatus("READY"); }, 2500);
+      return;
+    }
     setFaceState("thinking");
     setStatus("THINKING");
     try {
@@ -354,7 +433,66 @@ export default function App() {
     }
   }
 
+  // PC plan confirmation (desktop shell only). Nothing runs until
+  // the user confirms; a destructive plan asks a second time.
+  async function confirmPcPlan() {
+    const plan = pcPlan;
+    if (!plan) return;
+    if (plan.destructive && !plan.warned) {
+      setPcPlan({ ...plan, warned: true });
+      return;
+    }
+    setPcPlan(null);
+    setFaceState("thinking");
+    setStatus("THINKING");
+    try {
+      const res = await local.pcExecute(plan.steps);
+      const text = res.done?.length
+        ? `Done — ${res.done.join(" ")}`
+        : "Done.";
+      setMessages((m) => [...m, { role: "aries", content: text }]);
+      speak(text, talkBack);
+    } catch (e) {
+      setMessages((m) => [...m, { role: "aries", content: `Sorry — ${e.message}` }]);
+    }
+    setFaceState("idle");
+    setStatus("READY");
+  }
+  function denyPcPlan() {
+    setPcPlan(null);
+    setMessages((m) => [...m, { role: "aries", content: "Okay — I didn't do anything." }]);
+  }
+
   function startDictation() {
+    // Desktop shell: dictation goes through the local service, whose
+    // mic capture runs in a helper process — a bad audio driver can
+    // never close the app. The service reports plainly when the mic
+    // is unusable, and the app stays open.
+    if (isDesktop) {
+      if (listening) return;
+      setListening(true);
+      setFaceState("listening");
+      setStatus("LISTENING");
+      local.listen()
+        .then((r) => {
+          setListening(false);
+          setFaceState("idle");
+          setStatus("READY");
+          if (r.heard && r.text) {
+            setInput((v) => (v ? `${v} ${r.text}` : r.text));
+            inputRef.current?.focus();
+          } else {
+            setNotice("Didn't catch that — try again, or type it.");
+          }
+        })
+        .catch((e) => {
+          setListening(false);
+          setFaceState("idle");
+          setStatus("READY");
+          setNotice(`${e.message} Typing works as normal.`);
+        });
+      return;
+    }
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SR) {
       setNotice("This browser has no speech recognition. Use your keyboard's mic key instead — it dictates straight into the box.");
@@ -393,7 +531,42 @@ export default function App() {
     if (!wakeOn) {
       wakeRef.current?.stop?.();
       wakeRef.current = null;
+      if (isDesktop) local.wakeStop().catch(() => {});
       return;
+    }
+    // Desktop shell: the wake phrase is listened for by the local
+    // service (mic capture in a helper process, so a bad driver can
+    // never close the app). Poll for hearings once a second.
+    if (isDesktop) {
+      let stopped = false;
+      local.wakeStart()
+        .then(() => {
+          const poll = async () => {
+            if (stopped) return;
+            try {
+              const r = await local.wakePoll();
+              if (r.wakes > 0) {
+                setMini(false);
+                const greet = "Aries active. Ready to cook.";
+                setMessages((m) => [...m, { role: "aries", content: greet }]);
+                speak(greet, true);
+                setTimeout(startDictation, 900);
+              }
+            } catch { /* service down — keep polling quietly */ }
+            if (!stopped) wakeRef.current = setTimeout(poll, 1000);
+          };
+          wakeRef.current = setTimeout(poll, 1000);
+        })
+        .catch((e) => {
+          setNotice(`${e.message} Wake phrase is off for now.`);
+          setWakeOn(false);
+        });
+      return () => {
+        stopped = true;
+        clearTimeout(wakeRef.current);
+        wakeRef.current = null;
+        local.wakeStop().catch(() => {});
+      };
     }
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SR) {
@@ -449,6 +622,8 @@ export default function App() {
   return (
     <div className="aries-app">
       <Veil grain={grain} burstSignal={burstSignal} />
+
+      <div className="made-by" aria-hidden="true">© Made by Epsilon</div>
 
       <div className="topline">
         <span className="state-label">ARIES</span>
@@ -513,6 +688,25 @@ export default function App() {
               {listening ? "●" : "🎙"}
             </button>
             <button className="send" onClick={() => send()}>Send</button>
+          </div>
+        </div>
+      )}
+
+      {pcPlan && (
+        <div className="perm-modal" role="dialog" aria-label="PC action confirmation">
+          <div className="perm-card">
+            <h2>{pcPlan.warned ? "Are you sure?" : "Aries wants to do this on your PC"}</h2>
+            {pcPlan.warned ? (
+              <p>This plan {pcPlan.destructive ? "shuts something down, restarts, or deletes" : "does something"} — it cannot be undone easily. Confirm a second time to run it.</p>
+            ) : (
+              <ul className="pc-plan">
+                {pcPlan.lines.map((line, i) => <li key={i}>{line}</li>)}
+              </ul>
+            )}
+            <div className="perm-actions">
+              <button onClick={confirmPcPlan}>{pcPlan.warned ? "Yes, run it" : pcPlan.destructive ? "Continue…" : "Allow"}</button>
+              <button onClick={denyPcPlan}>Don't run it</button>
+            </div>
           </div>
         </div>
       )}
@@ -829,7 +1023,61 @@ function ConnectionsSection() {
         </div>
       ))}
       <button disabled={busy} onClick={load}>Check again</button>
-      <p className="fine">Setting up Gmail or Spotify needs a free developer app first. In Google Cloud Console / Spotify Developer Dashboard, create an OAuth app and add these redirect URLs — {window.location.origin}/api/connections/google/callback and {window.location.origin}/api/connections/spotify/callback — then add the client ID and secret in Render (Environment) as GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET and SPOTIFY_CLIENT_ID / SPOTIFY_CLIENT_SECRET.</p>
+      <p className="fine">Setting up Gmail or Spotify needs a free developer app first. In Google Cloud Console / Spotify Developer Dashboard, create an OAuth app and add these redirect URLs — {isDesktop ? "https://aries-ahvo.onrender.com" : window.location.origin}/api/connections/google/callback and {isDesktop ? "https://aries-ahvo.onrender.com" : window.location.origin}/api/connections/spotify/callback — then add the client ID and secret in Render (Environment) as GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET and SPOTIFY_CLIENT_ID / SPOTIFY_CLIENT_SECRET.</p>
+    </section>
+  );
+}
+
+// Desktop shell only (hidden on the web): the local service — PC
+// control master toggle, the NVIDIA engine key (for local PC
+// actions), and the service status. The key is saved to the OS
+// credential store on this PC, never in code or in the cloud.
+function DesktopSection() {
+  const [pcOn, setPcOn] = useState(false);
+  const [keyState, setKeyState] = useState({ has_key: false, source: null });
+  const [svcOk, setSvcOk] = useState(null);
+  const [key, setKey] = useState("");
+  const [msg, setMsg] = useState("");
+
+  useEffect(() => {
+    local.health().then(() => setSvcOk(true)).catch(() => setSvcOk(false));
+    local.pcEnabled().then((r) => setPcOn(r.enabled)).catch(() => {});
+    local.keyStatus().then(setKeyState).catch(() => {});
+  }, []);
+
+  async function togglePc() {
+    const next = !pcOn;
+    try {
+      await local.setPcEnabled(next);
+      setPcOn(next);
+      setMsg(next ? "PC control is on. Aries will ask before acting." : "PC control is off.");
+    } catch (e) { setMsg(e.message); }
+  }
+  async function saveKey() {
+    if (!key.trim()) { setMsg("Paste a key first."); return; }
+    try {
+      await local.saveKey(key.trim());
+      setKey("");
+      setKeyState(await local.keyStatus());
+      setMsg("Engine key saved on this PC.");
+    } catch (e) { setMsg(e.message); }
+  }
+  return (
+    <section>
+      <h3>Desktop</h3>
+      <p className="fine">Local service: {svcOk === null ? "checking…" : svcOk ? "running" : "not running — PC control, mic and wake phrase need it. Restart the app."}</p>
+      <div className="toggle-row">
+        <button className="pill" type="button" aria-pressed={pcOn} onClick={togglePc}>
+          PC control {pcOn ? "(on)" : "(off)"}
+        </button>
+      </div>
+      <p className="fine">PC control is off by default. When on, Aries asks before acting on your PC — and asks a second time before anything destructive (shutdown, restart, delete).</p>
+      <label>Engine key (NVIDIA, for PC actions)
+        <input type="password" value={key} onChange={(e) => setKey(e.target.value)} placeholder="nvapi-…" />
+      </label>
+      <p className="fine">Status: {keyState.has_key ? `saved (${keyState.source})` : "no key on this PC yet"}. The key is saved to the Windows Credential Manager, never in code.</p>
+      <button onClick={saveKey}>Save engine key</button>
+      {msg && <p className="notice">{msg}</p>}
     </section>
   );
 }
@@ -1081,18 +1329,24 @@ function MoreSheet({ data, tab, setTab, onClose, useSearch, setUseSearch, talkBa
 
         <section>
           <h3>Desktop app &amp; installer</h3>
-          <p>The desktop installer is packaged from the PyQt app in the Aries repo
-            (<code>aries/</code>). It fills the full screen when activated, is freely
-            resizable, and tapping the bot drops it into mini mode floating
-            bottom-right, just above the taskbar.</p>
+          <p>The desktop app (0.7.0) is the same React app as this website,
+            bundled locally into a real installed PC program — never the
+            live site in a window. It fills the full screen when activated,
+            is freely resizable, and tapping the bot drops it into mini mode
+            floating bottom-right, just above the taskbar. A local service
+            on your PC handles PC control, the microphone and the wake
+            phrase; chat, search, memory and voice still come from the
+            server.</p>
           <p><strong>Engine key:</strong> server-side only. The installer never contains
             an API key — users sign in to the SaaS backend instead. Aries is private
             to Epsilon and Kelfy until it goes commercial.</p>
           <p><strong>Roadmap:</strong> web search ✓ · voice ✓ · tasks ✓ · installer ✓ ·
-            face login ✓ · screenshot ✓ · PC control — last, not included here.</p>
+            face login ✓ · screenshot ✓ · PC control ✓ (in the desktop app).</p>
           <a className="download-btn" href="https://github.com/Epsilon-Odinson/Aries/releases/download/v0.5.0-desktop/Aries-Setup.exe">Download for Windows (Installer)</a>
           <p style={{ marginTop: "8px" }}>The installer sets up Aries, offers a desktop shortcut and a taskbar pin. Prefer the portable single file instead? Get <a href="https://github.com/Epsilon-Odinson/Aries/releases/download/v0.5.0-desktop/Aries.exe">Aries.exe</a> from the same release.</p>
         </section>
+
+        {isDesktop && <DesktopSection />}
         </>
       )}
 
